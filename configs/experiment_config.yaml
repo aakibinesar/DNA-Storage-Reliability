@@ -1,0 +1,123 @@
+# ============================================================
+# Calibrated Sequence-Level Risk Prediction for Adaptive
+# Redundancy Allocation in DNA Data Storage
+# ============================================================
+
+# ----- Reproducibility -----
+random_seed: 42
+
+# ----- Sequence generation -----
+sequence:
+  n_sequences: 2000          # sequences per configuration
+  data_bytes: 17             # bytes of actual payload per oligo
+  l_rs_default: 8            # default RS parity bytes (correction capacity = 4 byte errors)
+  seq_len_bases: 100         # total bases per oligo (data + parity, no primers here)
+  primer_len: 0              # primers stripped before ML; set >0 to include them
+  max_homopolymer: 3         # constraint for R∞-P8 encoding
+  gc_min: 0.40               # constraint for R∞-P8 encoding
+  gc_max: 0.60               # constraint for R∞-P8 encoding
+  encoding_schemes:
+    - simple                 # unconstrained 2-bit direct mapping
+    - constrained            # approximate R∞-P8 with homopolymer & GC constraints
+
+# ----- Channel model (DeSP-inspired) -----
+channel:
+  # Substitution regimes (four experimental conditions)
+  substitution_rates: [0.01, 0.05, 0.09, 0.12]
+  indel_rate: 0.001          # insertions + deletions combined (Seo et al. Fig S8)
+  ins_del_ratio: 0.5         # fraction of indel_rate that are insertions
+  # Synthesis stage
+  n_initial_copies: 100      # copies of each sequence after synthesis
+  synthesis_sub_rate: 0.001  # synthesis-specific substitution rate
+  synthesis_del_rate: 0.0005
+  synthesis_ins_rate: 0.0005
+  # PCR amplification
+  n_pcr_cycles: 10
+  pcr_fidelity: 0.9999       # per-base fidelity during PCR
+  pcr_bias: 0.05             # GC-content-driven amplification bias
+  # Decay
+  decay_loss_rate: 0.02      # fraction of copies lost during storage/decay
+  # Sequencing
+  sequencing_sub_rate: 0.002 # platform-level substitution noise (Illumina default)
+
+# ----- Coverage depths -----
+# NOTE: originally [30, 10]. At those depths majority-vote consensus drives
+# failure rates to ~0 with no Spearman-significant feature signal. Validated
+# at [5, 3]: GC deviation and max homopolymer run correlate with failure
+# probability (r ≈ 0.15-0.22, p<0.01 to p<0.0001).
+coverage_depths:
+  - 5     # primary (K=5)
+  - 3     # stress condition (K=3)
+
+# ----- Reed-Solomon threshold -----
+rs:
+  l_rs_min: 4                # minimum parity bytes (allocation lower bound)
+  l_rs_max: 16               # maximum parity bytes (allocation upper bound)
+  bases_per_byte: 4          # 2 bits/base -> 4 bases = 1 byte
+
+# ----- Feature extractor -----
+features:
+  gc_window_sizes: [10, 20, 40]
+  entropy_window_size: 10
+  kmer_k: [2, 3]             # dinucleotide + trinucleotide frequencies
+  max_homopolymer_tracked: 8
+  positional_bins: 10        # number of positional bins for density features
+
+# ----- Model training -----
+models:
+  xgboost:
+    max_depth: [3, 4, 5, 6]
+    learning_rate: [0.05, 0.1, 0.2]
+    n_estimators: [100, 200, 300, 500]
+    subsample: 0.8
+    colsample_bytree: 0.8
+    eval_metric: logloss
+    early_stopping_rounds: 20
+  random_forest:
+    n_estimators: 300
+    max_depth: [5, 10, null]
+    min_samples_leaf: [1, 5, 10]
+  logistic_regression:
+    C: [0.01, 0.1, 1.0, 10.0]
+    max_iter: 1000
+    solver: lbfgs
+
+# ----- Calibration -----
+calibration:
+  method_xgb: platt          # Platt scaling for XGBoost
+  method_rf: isotonic        # Isotonic regression for Random Forest
+  method_lr: none            # LR already outputs probabilities
+
+# ----- Evaluation -----
+evaluation:
+  ece_n_bins: 10
+  brier_decompose: true
+  auroc: true
+  pr_auc: true
+  reliability_diagram: true
+
+# ----- Dataset splits -----
+splits:
+  train_frac: 0.70
+  val_frac: 0.15
+  test_frac: 0.15
+  stratify_bins: 5           # bins for stratified split by failure frequency
+
+# ----- Allocation mechanism -----
+allocation:
+  delta_values: [1, 2, 4]    # parity byte increment options
+  n_monte_carlo_runs: 30     # independent simulator runs per config (M=30)
+  budget_tolerance: 1e-6     # floating-point budget neutrality check
+
+# ----- Dataset configurations (4 x 2 x 2 = 16 total) -----
+# Built programmatically from substitution_rates x coverage_depths x encoding_schemes
+
+# ----- Paths -----
+paths:
+  data_dir: data/
+  sequences_dir: data/sequences/
+  datasets_dir: data/datasets/
+  splits_dir: data/splits/
+  models_dir: models/saved/
+  results_dir: results/
+  figures_dir: results/figures/
