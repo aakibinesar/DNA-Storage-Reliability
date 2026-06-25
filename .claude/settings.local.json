@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(python -c \"import scipy; import matplotlib; print\\('scipy', scipy.__version__\\); print\\('matplotlib', matplotlib.__version__\\)\")",
+      "Bash(nohup python run_pipeline.py)",
+      "Bash(echo \"PID: $!\")",
+      "PowerShell(Get-Process python -ErrorAction SilentlyContinue)",
+      "Bash(git config *)",
+      "Bash(git commit -m ' *)",
+      "Bash(find \"C:/Users/LENOVO/Desktop/ML-DNA/dna-adaptive-redundancy/dna-adaptive-redundancy/.claude\" -not -path \"*/\\\\.*\")",
+      "Bash(git add *)"
+    ]
+  }
+}
