@@ -52,6 +52,10 @@ class CalibratedModel:
         X_cal : calibration features (N, d)
         y_cal : binary calibration labels (N,)
         """
+        if self.method == 'none':
+            self._fitted = True
+            return self
+
         raw_proba = self._raw_proba(X_cal)
 
         if self.method == 'platt':
@@ -103,7 +107,9 @@ class CalibratedModel:
         """Get raw (uncalibrated) probabilities from the base model."""
         proba = self.base_model.predict_proba(X)
         if proba.ndim == 2:
-            return proba[:, 1]   # positive class
+            if proba.shape[1] >= 2:
+                return proba[:, 1]
+            return np.zeros(proba.shape[0])  # single-class model; failure prob = 0
         return proba
 
 
