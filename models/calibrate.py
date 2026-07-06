@@ -117,12 +117,17 @@ class _PlattScaler:
 
     def fit(self, proba: np.ndarray, y: np.ndarray):
         from sklearn.linear_model import LogisticRegression  # type: ignore
+        if len(np.unique(y)) < 2:
+            self._lr = None  # single-class cal set; skip calibration
+            return
         logits = np.log(np.clip(proba, 1e-10, 1 - 1e-10)) - \
                  np.log(np.clip(1 - proba, 1e-10, 1 - 1e-10))
         self._lr = LogisticRegression(max_iter=1000, C=1e10)
         self._lr.fit(logits.reshape(-1, 1), y)
 
     def predict(self, proba: np.ndarray) -> np.ndarray:
+        if self._lr is None:
+            return proba  # no calibration applied; return raw proba
         logits = np.log(np.clip(proba, 1e-10, 1 - 1e-10)) - \
                  np.log(np.clip(1 - proba, 1e-10, 1 - 1e-10))
         return self._lr.predict_proba(logits.reshape(-1, 1))[:, 1]

@@ -66,6 +66,26 @@ def train_all_models(
         print(f"  Class balance: pos_frac={pos_frac:.4f} "
               f"({'IMBALANCED — using sample weights' if pos_frac < 0.05 else 'OK'})")
 
+    # Single-class guard: classifiers require at least 2 classes
+    if len(np.unique(y_train_bin)) < 2:
+        from sklearn.dummy import DummyClassifier
+        from sklearn.preprocessing import StandardScaler
+        if verbose:
+            label = 'all-negative (no failures)' if y_train_bin[0] == 0 else 'all-positive'
+            print(f"  WARNING: single-class labels ({label}) — using DummyClassifier for all models.")
+        dummy = DummyClassifier(strategy='most_frequent')
+        dummy.fit(X_train, y_train_bin)
+        scaler = StandardScaler()
+        scaler.fit(X_train)
+        dummy_cal = CalibratedModel(dummy, method='none')
+        dummy_cal.fit(X_val, y_val_bin)
+        return {
+            'xgboost': dummy_cal,
+            'random_forest': dummy_cal,
+            'logistic_regression': dummy,
+            'logistic_scaler': scaler,
+        }
+
     sample_weights = None
     if pos_frac < 0.05 or pos_frac > 0.95:
         # Inverse-frequency weighting
