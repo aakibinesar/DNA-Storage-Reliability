@@ -229,7 +229,11 @@ def main():
     # Get risk scores from calibrated and raw XGBoost
     xgb_cal   = models.get('xgboost')
     calibrated_risk = xgb_cal.predict_proba(X_te) if xgb_cal else np.zeros(len(y_te))
-    raw_risk        = xgb_cal.base_model.predict_proba(X_te)[:, 1] if xgb_cal else np.zeros(len(y_te))
+    if xgb_cal:
+        _p = xgb_cal.base_model.predict_proba(X_te)
+        raw_risk = _p[:, 1] if _p.shape[1] >= 2 else np.zeros(len(y_te))
+    else:
+        raw_risk = np.zeros(len(y_te))
 
     # Rebuild channel
     channel = build_channel_from_config(cfg, sub_rate, seed=cfg['random_seed'])
