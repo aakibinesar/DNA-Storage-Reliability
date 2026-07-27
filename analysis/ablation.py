@@ -145,11 +145,10 @@ def _train_quick_xgb(X_tr, y_tr, X_val, y_val, cfg, seed):
 
     clf = xgb.XGBClassifier(
         max_depth=4, learning_rate=0.1, n_estimators=200,
-        use_label_encoder=False, eval_metric='logloss',
+        eval_metric='logloss', early_stopping_rounds=20,
         random_state=seed, verbosity=0,
     )
-    clf.fit(X_tr, y_tr_bin, eval_set=[(X_val, y_val_bin)],
-            early_stopping_rounds=20, verbose=False)
+    clf.fit(X_tr, y_tr_bin, eval_set=[(X_val, y_val_bin)], verbose=False)
 
     cal = CalibratedModel(clf, method='platt', seed=seed)
     cal.fit(X_val, y_val_bin)
