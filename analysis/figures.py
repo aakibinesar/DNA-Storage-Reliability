@@ -285,6 +285,44 @@ def _save_fig(fig, out_path: str, dpi: int = FIG_DPI):
 
 # ── CLI entry point ──────────────────────────────────────────────────────────
 
+def _load_allocation_delta_results(alloc_dir: str, cfg: dict) -> Dict[int, Dict[str, np.ndarray]]:
+    """Aggregate FRR arrays from all NPZ files, keyed by delta."""
+    import glob
+    delta_results: Dict[int, Dict[str, list]] = {}
+    for path in glob.glob(os.path.join(alloc_dir, '*.npz')):
+        basename = os.path.basename(path)
+        for delta in cfg['allocation']['delta_values']:
+            if basename.endswith(f'_delta{delta}.npz'):
+                d = np.load(path)
+                if delta not in delta_results:
+                    delta_results[delta] = {'frr_uniform': [], 'frr_oracle': [], 'frr_xgb_cal': []}
+                for k in ('frr_uniform', 'frr_oracle', 'frr_xgb_cal'):
+                    if k in d:
+                        delta_results[delta][k].append(d[k])
+                break
+    return {
+        delta: {k: np.concatenate(arrs) for k, arrs in cond.items()}
+        for delta, cond in delta_results.items()
+    }
+
+
+def _load_shift_results(shift_dir: str) -> Dict[str, dict]:
+    """Merge all distribution shift CSVs into a single results dict (averaged over coverage/encoding)."""
+    import glob
+    import pandas as pd
+    all_rows: list = []
+    for path in glob.glob(os.path.join(shift_dir, 'dist_shift_*.csv')):
+        df = pd.read_csv(path)
+        all_rows.append(df)
+    if not all_rows:
+        return {}
+    combined = pd.concat(all_rows, ignore_index=True)
+    results: Dict[str, dict] = {}
+    for condition, grp in combined.groupby('condition'):
+        results[condition] = grp.mean(numeric_only=True).to_dict()
+    return results
+
+
 def main():
     import argparse
     parser = argparse.ArgumentParser(description='Generate paper figures.')
@@ -295,14 +333,18 @@ def main():
     with open(args.config) as f:
         cfg = yaml.safe_load(f)
 
+    out = args.out
+    os.makedirs(out, exist_ok=True)
+
+    seed    = cfg['random_seed']
+    seq_cfg = cfg['sequence']
+
+    # ── Figure S1: feature distributions ─────────────────────────────────────
     print("[figures] Generating diagnostic feature-distribution figure (S1)...")
     from sequence_generator import generate_sequences
     from feature_extractor import extract_features
 
-    seed    = cfg['random_seed']
-    seq_cfg = cfg['sequence']
     n_diag  = 500
-
     seqs_simple = [s for s, _ in generate_sequences(
         n_diag, seq_cfg['seq_len_bases'], 'simple', seed=seed)]
     seqs_const  = [s for s, _ in generate_sequences(
@@ -314,9 +356,111 @@ def main():
 
     figure_s1_feature_distributions(
         X_s, X_c, feat_names,
-        out_path=os.path.join(args.out, 'fig_s1_feature_distributions.png')
+        out_path=os.path.join(out, 'fig_s1_feature_distributions.png')
     )
-    print("[figures] Done — check", args.out)
+
+    # ── Figures 4 + S4: FRR vs. delta ────────────────────────────────────────
+    alloc_dir = os.path.join(os.path.dirname(out), '..', 'results', 'allocation')
+    alloc_dir = os.path.normpath(alloc_dir)
+    if not os.path.isdir(alloc_dir):
+        alloc_dir = os.path.join(os.path.dirname(args.out.rstrip('/\\')), 'allocation')
+        alloc_dir = os.path.normpath(os.path.join(
+            os.path.dirname(__file__), '..', 'results', 'allocation'))
+    print(f"[figures] Loading allocation results from {alloc_dir} ...")
+    delta_results = _load_allocation_delta_results(alloc_dir, cfg)
+    if delta_results:
+        figure4_frr_vs_delta(
+            delta_results,
+            out_path=os.path.join(out, 'fig4_frr_vs_delta.png')
+        )
+        figure_s4_cost_reliability(
+            delta_results,
+            out_path=os.path.join(out, 'fig_s4_cost_reliability.png')
+        )
+    else:
+        print("  [figures] No allocation NPZ files found — skipping Figures 4/S4")
+
+    # ── Figure 5: distribution shift ──────────────────────────────────────────
+    shift_dir = os.path.normpath(os.path.join(
+        os.path.dirname(__file__), '..', 'results', 'distribution_shift'))
+    print(f"[figures] Loading distribution shift results from {shift_dir} ...")
+    shift_results = _load_shift_results(shift_dir)
+    if shift_results:
+        figure5_distribution_shift(
+            shift_results,
+            out_path=os.path.join(out, 'fig5_distribution_shift.png')
+        )
+    else:
+        print("  [figures] No distribution shift CSV files found — skipping Figure 5")
+
+    # ── Figures 2 + 3: reliability diagrams + SHAP ───────────────────────────
+    models_dir = os.path.normpath(os.path.join(
+        os.path.dirname(__file__), '..', 'models', 'saved'))
+    rep_configs = ['sub12_k3_simple', 'sub09_k3_simple', 'sub05_k5_simple', 'sub05_k5_constrained']
+    rep_configs = [k for k in rep_configs if
+                   os.path.exists(os.path.join(models_dir, f'{k}_xgboost.pkl'))]
+
+    if rep_configs:
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'models'))
+        from dataset_assembler import load_dataset
+        from train import load_models
+        from calibrate import CalibratedModel
+
+        print("[figures] Generating reliability diagram (Figure 2)...")
+        y_true_list, y_cal_list, y_raw_list, labels = [], [], [], []
+        shap_importances, shap_feat_names = None, None
+
+        for key in rep_configs[:2]:
+            try:
+                X_tr, X_val, X_te, y_tr, y_val, y_te, fnames = load_dataset(key, cfg)
+                models = load_models(models_dir, key)
+                xgb_cal = models.get('xgboost')
+                if xgb_cal is None:
+                    continue
+                from sklearn.dummy import DummyClassifier as _Dummy
+                if isinstance(xgb_cal.base_model, _Dummy):
+                    continue
+                y_bin = (y_te >= 0.5).astype(int)
+                y_cal = xgb_cal.predict_proba(X_te)
+                raw_p = xgb_cal.base_model.predict_proba(X_te)
+                y_raw = raw_p[:, 1] if raw_p.shape[1] >= 2 else np.zeros(len(y_bin))
+                y_true_list.append(y_bin)
+                y_cal_list.append(y_cal)
+                y_raw_list.append(y_raw)
+                labels.append(key.replace('_', ' '))
+                # Collect SHAP from first config with a real tree model
+                from sklearn.dummy import DummyClassifier as _Dummy
+                if shap_importances is None and not isinstance(xgb_cal.base_model, _Dummy):
+                    try:
+                        import shap
+                        base = xgb_cal.base_model
+                        explainer = shap.TreeExplainer(base)
+                        sv = explainer.shap_values(X_te)
+                        if isinstance(sv, list):
+                            sv = sv[1]
+                        shap_importances = np.abs(sv).mean(axis=0)
+                        shap_feat_names  = fnames
+                    except Exception as e:
+                        print(f"  [figures] SHAP failed: {e}")
+            except Exception as e:
+                print(f"  [figures] Could not load {key}: {e}")
+
+        if y_true_list:
+            figure2_reliability_diagrams(
+                y_true_list, y_cal_list, y_raw_list, labels,
+                out_path=os.path.join(out, 'fig2_reliability_diagrams.png')
+            )
+        if shap_importances is not None:
+            print("[figures] Generating SHAP feature importance (Figure 3)...")
+            figure3_shap_importance(
+                shap_importances, shap_feat_names,
+                out_path=os.path.join(out, 'fig3_shap_importance.png')
+            )
+    else:
+        print("  [figures] No saved models found — skipping Figures 2/3")
+
+    print("[figures] Done — check", out)
 
 
 if __name__ == '__main__':
