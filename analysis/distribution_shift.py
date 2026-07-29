@@ -62,7 +62,6 @@ def run_distribution_shift(
     -------
     results dict keyed by condition label (e.g. 'mild_1pct->5pct')
     """
-    from train import _train_quick_xgb_standalone
     from evaluate import full_evaluation, allocation_statistics
     from mechanism import AllocationMechanism
 
