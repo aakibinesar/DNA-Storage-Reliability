@@ -1,6 +1,6 @@
 # Pipeline outputs
 data/
-results/
+results/allocation/
 logs/
 pipeline.log
 pipeline_status.json
