@@ -115,7 +115,6 @@ After the full pipeline completes:
 
 ```
 results/
-├── allocation/          # 48 NPZ files — FRR arrays (30 MC runs each)
 ├── ablation/            # 16 CSVs — per-group metric deltas
 ├── distribution_shift/  # 4 CSVs  — ECE/Brier/PR-AUC under transfer
 └── figures/
