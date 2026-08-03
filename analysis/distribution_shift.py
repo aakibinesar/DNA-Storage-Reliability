@@ -38,9 +38,10 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'allocation'))
 
 
 TRANSFER_CONDITIONS = [
-    (0.01, 0.05, 'mild'),
-    (0.05, 0.12, 'moderate'),
-    (0.01, 0.12, 'severe'),
+    (0.09, 0.12, 'mild'),
+    (0.09, 0.15, 'moderate'),
+    (0.09, 0.20, 'severe'),
+    (0.12, 0.18, 'moderate_high'),
 ]
 
 
