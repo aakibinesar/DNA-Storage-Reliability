@@ -90,6 +90,14 @@ def run_ablation(
 
     results = {}
 
+    # Guard: skip ablation if training labels are single-class
+    y_tr_bin_check = (y_train >= 0.5).astype(int)
+    if len(np.unique(y_tr_bin_check)) < 2:
+        if verbose:
+            label = 'failure' if y_tr_bin_check[0] == 1 else 'success'
+            print(f"  [ablation] Single-class labels (all {label}) — skipping ablation")
+        return {}
+
     # Full-feature baseline
     if verbose:
         print("  [ablation] Full features (baseline)...")
@@ -208,7 +216,8 @@ def main():
         X_tr, y_tr, X_val, y_val, X_te, y_te, feat_names, cfg,
         seed=cfg['random_seed'], verbose=True
     )
-    print_ablation_table(results)
+    if results:
+        print_ablation_table(results)
 
     out_path = os.path.join(args.out, f'{args.key}_ablation.csv')
     save_ablation_results(results, out_path)

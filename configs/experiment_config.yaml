@@ -22,8 +22,8 @@ sequence:
 
 # ----- Channel model (DeSP-inspired) -----
 channel:
-  # Substitution regimes (four experimental conditions)
-  substitution_rates: [0.01, 0.05, 0.09, 0.12]
+  # Substitution regimes (seven experimental conditions)
+  substitution_rates: [0.01, 0.05, 0.09, 0.12, 0.15, 0.18, 0.20]
   indel_rate: 0.001          # insertions + deletions combined (Seo et al. Fig S8)
   ins_del_ratio: 0.5         # fraction of indel_rate that are insertions
   # Synthesis stage
@@ -109,7 +109,7 @@ allocation:
   n_monte_carlo_runs: 30     # independent simulator runs per config (M=30)
   budget_tolerance: 1e-6     # floating-point budget neutrality check
 
-# ----- Dataset configurations (4 x 2 x 2 = 16 total) -----
+# ----- Dataset configurations (7 x 2 x 2 = 28 total) -----
 # Built programmatically from substitution_rates x coverage_depths x encoding_schemes
 
 # ----- Paths -----

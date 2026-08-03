@@ -4,6 +4,9 @@ results/allocation/
 logs/
 pipeline.log
 pipeline_status.json
+pipeline_err.log
+models/saved/
+colab_pipeline.ipynb
 
 # Python
 __pycache__/
