@@ -6,15 +6,21 @@ Generate all figures for the paper (paper-ready quality, matplotlib + seaborn).
 Figure index:
   Figure 2 — Reliability diagrams for two representative conditions
   Figure 3 — SHAP feature importance bar chart (top 15 features)
-  Figure 4 — FRR vs. delta for XGBoost (calibrated) and Oracle
+  Figure 4 — OFR vs. delta for XGBoost (calibrated) and Oracle
   Figure 5 — Distribution shift: ECE degradation across transfer conditions
-  Figure S1 — Feature distribution plots (R∞-P8 vs. simple mapping)
-  Figure S2 — Brier score decomposition heatmap across all 16 configs
+  Figure S1 — Feature distribution plots (constrained vs. simple mapping)
+  Figure S2 — Brier score decomposition heatmap across all 28 configs
   Figure S3 — Calibration comparison: raw vs. Platt-scaled XGBoost
-  Figure S4 — Cost-reliability trade-off curves (redundancy budget vs. FRR)
+  Figure S4 — Cost-reliability trade-off curves (redundancy budget vs. OFR)
+
+Terminology (R5 fix):
+  OFR — Oligo Failure Rate = fraction of oligos that fail RS decoding after
+         allocation.  Formerly (incorrectly) called FRR in earlier code.
+  OFR reduction = (OFR_uniform - OFR_method) / OFR_uniform — the actual
+         reduction metric.
 
 Usage:
-    python analysis/figures.py --config configs/experiment_config.yaml \
+    python analysis/figures.py --config configs/experiment_config.yaml \\
         --out results/figures/
 """
 
@@ -40,12 +46,16 @@ FONT_SIZE   = 11
 TITLE_SIZE  = 13
 FIG_DPI     = 150
 PALETTE     = {
-    'uniform'  : '#9e9e9e',
-    'oracle'   : '#2196F3',
-    'xgb_cal'  : '#4CAF50',
-    'xgb_raw'  : '#FF5722',
-    'simple'   : '#FF9800',
-    'constrained': '#9C27B0',
+    'uniform'    : '#9e9e9e',
+    'oracle'     : '#2196F3',
+    'xgb_cal'   : '#4CAF50',
+    'xgb_raw'   : '#FF5722',
+    'gc_dev'     : '#FF9800',  # R10 baseline
+    'hp'         : '#9C27B0',  # R10 baseline
+    'composite'  : '#795548',  # R10 baseline (best non-ML competitor)
+    'random'     : '#607D8B',  # R10 allocation control
+    'simple'     : '#FF9800',
+    'constrained': '#E91E63',
 }
 
 
@@ -146,35 +156,53 @@ def figure3_shap_importance(
     _save_fig(fig, out_path)
 
 
-# ── Figure 4: FRR vs. Delta ──────────────────────────────────────────────────
+# ── Figure 4: OFR vs. Delta ──────────────────────────────────────────────────
 
-def figure4_frr_vs_delta(
+def figure4_ofr_vs_delta(
     delta_results: Dict[int, Dict[str, np.ndarray]],
     out_path: str,
 ):
-    """FRR mean ± std vs. delta for XGBoost-calibrated, Oracle, and Uniform."""
+    """Oligo Failure Rate mean ± std vs. delta for calibrated XGBoost, Oracle, Uniform.
+
+    OFR (Oligo Failure Rate) = fraction of oligos that fail RS decoding after
+    allocation.  Lower is better.  The oracle (true marginal-benefit ceiling) should
+    lie below uniform; XGBoost-calibrated should lie between the two.
+    """
     _setup_style()
-    fig, ax = plt.subplots(figsize=(7, 5))
+    fig, ax = plt.subplots(figsize=(8, 5))
     deltas = sorted(delta_results.keys())
 
+    # Primary conditions (always plotted)
     for condition, colour, label in [
-        ('frr_uniform',  PALETTE['uniform'],  'Uniform (baseline)'),
-        ('frr_oracle',   PALETTE['oracle'],   'Oracle (ceiling)'),
-        ('frr_xgb_cal',  PALETTE['xgb_cal'],  'XGBoost Calibrated'),
+        ('ofr_uniform', PALETTE['uniform'], 'Uniform (baseline)'),
+        ('ofr_oracle',  PALETTE['oracle'],  'Oracle (marginal-benefit ceiling)'),
+        ('ofr_xgb_cal', PALETTE['xgb_cal'], 'XGBoost Calibrated'),
     ]:
         means = [delta_results[d][condition].mean() for d in deltas]
         stds  = [delta_results[d][condition].std()  for d in deltas]
-        ax.errorbar(
-            deltas, means, yerr=stds,
-            marker='o', color=colour, label=label,
-            capsize=4, linewidth=2,
-        )
+        ax.errorbar(deltas, means, yerr=stds,
+                    marker='o', color=colour, label=label,
+                    capsize=4, linewidth=2)
 
-    ax.set_xlabel('Delta (parity byte increment)')
-    ax.set_ylabel('Failure Reduction Rate (FRR)')
-    ax.set_title('FRR vs. Redundancy Reallocation Aggressiveness')
+    # R10: rule-based baselines (plotted only if present in NPZ files)
+    for condition, colour, label in [
+        ('ofr_gc_dev',    PALETTE['gc_dev'],   'GC-deviation rule'),
+        ('ofr_hp',        PALETTE['hp'],        'HP-length rule'),
+        ('ofr_composite', PALETTE['composite'], 'Composite rule (GC + HP)'),
+        ('ofr_random',    PALETTE['random'],    'Random allocation'),
+    ]:
+        if all(condition in delta_results.get(d, {}) for d in deltas):
+            means = [delta_results[d][condition].mean() for d in deltas]
+            stds  = [delta_results[d][condition].std()  for d in deltas]
+            ax.errorbar(deltas, means, yerr=stds,
+                        marker='s', color=colour, label=label,
+                        capsize=3, linewidth=1.2, linestyle='--', alpha=0.75)
+
+    ax.set_xlabel(r'$\Delta$ (parity byte increment)')
+    ax.set_ylabel('Oligo Failure Rate (OFR)')
+    ax.set_title(r'OFR vs. Reallocation Aggressiveness ($\Delta$)')
     ax.set_xticks(deltas)
-    ax.legend()
+    ax.legend(fontsize=9)
     plt.tight_layout()
     _save_fig(fig, out_path)
 
@@ -252,22 +280,21 @@ def figure_s4_cost_reliability(
     delta_results: Dict[int, Dict[str, np.ndarray]],
     out_path:      str,
 ):
-    """Cost-reliability trade-off: FRR reduction per redundancy unit."""
+    """Cost-reliability trade-off: OFR vs. reallocation aggressiveness."""
     _setup_style()
     fig, ax = plt.subplots(figsize=(7, 5))
     deltas = sorted(delta_results.keys())
 
     for condition, colour, label in [
-        ('frr_xgb_cal',  PALETTE['xgb_cal'], 'XGBoost Calibrated'),
-        ('frr_oracle',   PALETTE['oracle'],  'Oracle'),
-        ('frr_uniform',  PALETTE['uniform'], 'Uniform baseline'),
+        ('ofr_xgb_cal',  PALETTE['xgb_cal'], 'XGBoost Calibrated'),
+        ('ofr_oracle',   PALETTE['oracle'],  'Oracle (marginal-benefit)'),
+        ('ofr_uniform',  PALETTE['uniform'], 'Uniform baseline'),
     ]:
-        frr_means = np.array([delta_results[d][condition].mean() for d in deltas])
-        # Redundancy overhead: delta bytes × fraction of realloc sequences
-        ax.plot(deltas, frr_means, marker='s', color=colour, label=label, linewidth=2)
+        ofr_means = np.array([delta_results[d][condition].mean() for d in deltas])
+        ax.plot(deltas, ofr_means, marker='s', color=colour, label=label, linewidth=2)
 
-    ax.set_xlabel('Reallocation delta Δ (parity bytes)')
-    ax.set_ylabel('Mean Failure Rate')
+    ax.set_xlabel(r'Reallocation $\Delta$ (parity bytes)')
+    ax.set_ylabel('Mean Oligo Failure Rate (OFR)')
     ax.set_title('Cost-Reliability Trade-off')
     ax.legend()
     plt.tight_layout()
@@ -286,7 +313,12 @@ def _save_fig(fig, out_path: str, dpi: int = FIG_DPI):
 # ── CLI entry point ──────────────────────────────────────────────────────────
 
 def _load_allocation_delta_results(alloc_dir: str, cfg: dict) -> Dict[int, Dict[str, np.ndarray]]:
-    """Aggregate FRR arrays from all NPZ files, keyed by delta."""
+    """Aggregate OFR arrays from all NPZ files, keyed by delta.
+
+    Loads all keys that start with 'ofr_' so that R10 baseline keys
+    (ofr_gc_dev, ofr_hp, ofr_composite, ofr_random) are automatically
+    included when present, without requiring code changes here.
+    """
     import glob
     delta_results: Dict[int, Dict[str, list]] = {}
     for path in glob.glob(os.path.join(alloc_dir, '*.npz')):
@@ -295,10 +327,10 @@ def _load_allocation_delta_results(alloc_dir: str, cfg: dict) -> Dict[int, Dict[
             if basename.endswith(f'_delta{delta}.npz'):
                 d = np.load(path)
                 if delta not in delta_results:
-                    delta_results[delta] = {'frr_uniform': [], 'frr_oracle': [], 'frr_xgb_cal': []}
-                for k in ('frr_uniform', 'frr_oracle', 'frr_xgb_cal'):
-                    if k in d:
-                        delta_results[delta][k].append(d[k])
+                    delta_results[delta] = {}
+                for k in d.keys():
+                    if k.startswith('ofr_'):
+                        delta_results[delta].setdefault(k, []).append(d[k])
                 break
     return {
         delta: {k: np.concatenate(arrs) for k, arrs in cond.items()}
@@ -359,7 +391,7 @@ def main():
         out_path=os.path.join(out, 'fig_s1_feature_distributions.png')
     )
 
-    # ── Figures 4 + S4: FRR vs. delta ────────────────────────────────────────
+    # ── Figures 4 + S4: OFR vs. delta ────────────────────────────────────────
     alloc_dir = os.path.join(os.path.dirname(out), '..', 'results', 'allocation')
     alloc_dir = os.path.normpath(alloc_dir)
     if not os.path.isdir(alloc_dir):
@@ -369,9 +401,9 @@ def main():
     print(f"[figures] Loading allocation results from {alloc_dir} ...")
     delta_results = _load_allocation_delta_results(alloc_dir, cfg)
     if delta_results:
-        figure4_frr_vs_delta(
+        figure4_ofr_vs_delta(
             delta_results,
-            out_path=os.path.join(out, 'fig4_frr_vs_delta.png')
+            out_path=os.path.join(out, 'fig4_ofr_vs_delta.png')
         )
         figure_s4_cost_reliability(
             delta_results,
@@ -423,8 +455,8 @@ def main():
                     continue
                 y_bin = (y_te >= 0.5).astype(int)
                 y_cal = xgb_cal.predict_proba(X_te)
-                raw_p = xgb_cal.base_model.predict_proba(X_te)
-                y_raw = raw_p[:, 1] if raw_p.shape[1] >= 2 else np.zeros(len(y_bin))
+                # R1 fix: base_model is XGBRegressor after training changes — no predict_proba
+                y_raw = np.clip(xgb_cal.base_model.predict(X_te), 0.0, 1.0)
                 y_true_list.append(y_bin)
                 y_cal_list.append(y_cal)
                 y_raw_list.append(y_raw)

@@ -8,13 +8,25 @@ periodically (e.g. from Claude Code, tmux, or the mobile app) rather than
 watched live.
 
 Pipeline order (matches the dependency chain in the implementation plan):
-    1. datasets             -- build all 16 dataset configs (sequence gen,
-                                channel sim, labels, features, splits)
-    2. train                -- train+calibrate 3 models for each of 16 keys
-    3. gate_check            -- Week 4 go/no-go gate (informational by default)
-    4. allocation            -- run allocation experiments per key x delta
-    5. ablation + dist_shift -- run concurrently (both only depend on `train`)
-    6. figures               -- generate all paper figures
+    1. datasets                -- build all 28 dataset configs (sequence gen,
+                                  channel sim, labels, features, splits)
+    2. train                   -- train+calibrate 3 models for each of 28 keys
+    3. gate_check              -- Week 4 go/no-go gate (informational by default)
+    4. threshold_sensitivity   -- R8: sweep decision thresholds 0.10–0.90,
+                                  report near-threshold label uncertainty
+    5. calibration_regimes     -- R9: ECE/Brier stratified by under_failure /
+                                  informative / saturated regimes, with bootstrap
+                                  95% CIs and calibration deltas
+    6. regime_evaluation       -- R11: full Layer 1 suite (AUROC, F1, ECE, Brier)
+                                  per regime across all 28 configs; warns when
+                                  the informative regime is < 10% of test set
+    7. allocation              -- run allocation experiments per key x delta
+                                  NOTE: allocation results produced before the
+                                  R2+R3 fixes are stale.  Move them out of
+                                  results/allocation/ or use --force to regenerate.
+    7. ablation + dist_shift   -- run concurrently (both only depend on `train`)
+    8. channel_ablation        -- R7: model quality under ablated channel variants
+    9. figures                 -- generate all paper figures
 
 Checkpointing
 -------------
@@ -63,8 +75,11 @@ CONFIG_DEF = os.path.join(ROOT, 'configs', 'experiment_config.yaml')
 STATUS_PATH = os.path.join(ROOT, 'pipeline_status.json')
 LOG_DIR    = os.path.join(ROOT, 'logs')
 
-STAGE_ORDER = ['datasets', 'train', 'gate_check', 'allocation',
-               'ablation', 'distribution_shift', 'figures']
+STAGE_ORDER = ['datasets', 'train', 'gate_check', 'threshold_sensitivity',
+               'calibration_regimes', 'regime_evaluation', 'allocation',
+               'ablation', 'distribution_shift', 'transfer_radius',
+               'shap_stability', 'encoding_confound',
+               'channel_ablation', 'figures']
 
 _status_lock = threading.Lock()
 
@@ -176,6 +191,18 @@ def ablation_file_exists(out_dir, key):
 
 def dist_shift_file_exists(out_dir, coverage, encoding):
     return os.path.exists(os.path.join(ROOT, out_dir, f'dist_shift_k{coverage}_{encoding}.csv'))
+
+
+def transfer_radius_file_exists(out_dir):
+    return os.path.exists(os.path.join(ROOT, out_dir, 'transfer_radius_summary.csv'))
+
+
+def shap_stability_file_exists(out_dir, key):
+    return os.path.exists(os.path.join(ROOT, out_dir, f'shap_stability_{key}.csv'))
+
+
+def encoding_confound_file_exists(out_dir):
+    return os.path.exists(os.path.join(ROOT, out_dir, 'encoding_confound_summary.csv'))
 
 
 def figures_exist(out_dir):
@@ -305,6 +332,158 @@ def stage_distribution_shift(cfg, args):
     return rc_all
 
 
+def stage_regime_evaluation(cfg, args):
+    """R11: full Layer 1 metric suite stratified by failure-freq regime."""
+    out_dir  = os.path.join(cfg['paths']['results_dir'], 'regime_evaluation')
+    out_path = os.path.join(out_dir, 'regime_evaluation_all.csv')
+    if not args.force and os.path.exists(os.path.join(ROOT, out_path)):
+        print("[regime_evaluation] Combined CSV already exists — skipping.")
+        set_item_status('regime_evaluation', state='SKIPPED')
+        return 0
+    cmd = [sys.executable, '-u', 'analysis/regime_evaluation.py',
+           '--config', args.config,
+           '--models-dir', cfg['paths']['models_dir'],
+           '--out', out_dir]
+    return run_cmd('regime_evaluation', cmd,
+                   os.path.join(LOG_DIR, 'regime_evaluation.log'), args.dry_run)
+
+
+def stage_calibration_regimes(cfg, args):
+    """R9: regime-stratified calibration with bootstrap CIs."""
+    keys    = get_all_keys(cfg)
+    out_dir = os.path.join(cfg['paths']['results_dir'], 'calibration_regimes')
+    rc_all  = 0
+    for key in keys:
+        name     = f'calibration_regimes:{key}'
+        out_path = os.path.join(out_dir, f'{key}_calibration_regimes.csv')
+        if not args.force and os.path.exists(os.path.join(ROOT, out_path)):
+            print(f"[calibration_regimes] {key}: result already exists — skipping.")
+            set_item_status(name, state='SKIPPED')
+            continue
+        cmd = [sys.executable, '-u', 'analysis/calibration_regimes.py',
+               '--config', args.config,
+               '--key', key,
+               '--models-dir', cfg['paths']['models_dir'],
+               '--out', out_dir]
+        rc = run_cmd(name, cmd,
+                     os.path.join(LOG_DIR, f'calibration_regimes_{key}.log'),
+                     args.dry_run)
+        if rc != 0:
+            rc_all = rc
+            if not args.keep_going:
+                return rc_all
+    return rc_all
+
+
+def stage_threshold_sensitivity(cfg, args):
+    """R8: sweep classification thresholds and quantify near-threshold label noise."""
+    keys    = get_all_keys(cfg)
+    out_dir = os.path.join(cfg['paths']['results_dir'], 'threshold_sensitivity')
+    rc_all  = 0
+    for key in keys:
+        name     = f'threshold_sensitivity:{key}'
+        out_path = os.path.join(out_dir, f'{key}_threshold_sensitivity.csv')
+        if not args.force and os.path.exists(os.path.join(ROOT, out_path)):
+            print(f"[threshold_sensitivity] {key}: result already exists — skipping.")
+            set_item_status(name, state='SKIPPED')
+            continue
+        cmd = [sys.executable, '-u', 'analysis/threshold_sensitivity.py',
+               '--config', args.config,
+               '--key', key,
+               '--models-dir', cfg['paths']['models_dir'],
+               '--out', out_dir]
+        rc = run_cmd(name, cmd,
+                     os.path.join(LOG_DIR, f'threshold_sensitivity_{key}.log'),
+                     args.dry_run)
+        if rc != 0:
+            rc_all = rc
+            if not args.keep_going:
+                return rc_all
+    return rc_all
+
+
+def stage_transfer_radius(cfg, args):
+    """R12: systematic all-pairs transfer radius using saved models + regime-aware AUROC."""
+    out_dir  = os.path.join(cfg['paths']['results_dir'], 'transfer_radius')
+    if not args.force and transfer_radius_file_exists(out_dir):
+        print("[transfer_radius] Summary CSV already exists — skipping.")
+        set_item_status('transfer_radius', state='SKIPPED')
+        return 0
+    cmd = [sys.executable, '-u', 'analysis/transfer_radius.py',
+           '--config', args.config,
+           '--models-dir', cfg['paths']['models_dir'],
+           '--out', out_dir]
+    return run_cmd('transfer_radius', cmd,
+                   os.path.join(LOG_DIR, 'transfer_radius.log'), args.dry_run)
+
+
+def stage_shap_stability(cfg, args):
+    """R13: bootstrap SHAP stability analysis — per-key, informative regime only."""
+    keys    = get_all_keys(cfg)
+    out_dir = os.path.join(cfg['paths']['results_dir'], 'shap_stability')
+    rc_all  = 0
+    for key in keys:
+        name     = f'shap_stability:{key}'
+        if not args.force and shap_stability_file_exists(out_dir, key):
+            print(f"[shap_stability] {key}: result already exists — skipping.")
+            set_item_status(name, state='SKIPPED')
+            continue
+        cmd = [sys.executable, '-u', 'analysis/shap_stability.py',
+               '--config', args.config,
+               '--key', key,
+               '--models-dir', cfg['paths']['models_dir'],
+               '--out', out_dir]
+        rc = run_cmd(name, cmd,
+                     os.path.join(LOG_DIR, f'shap_stability_{key}.log'),
+                     args.dry_run)
+        if rc != 0:
+            rc_all = rc
+            if not args.keep_going:
+                return rc_all
+    return rc_all
+
+
+def stage_encoding_confound(cfg, args):
+    """R14: deconfound simple vs constrained encoding comparison for all strata."""
+    out_dir = os.path.join(cfg['paths']['results_dir'], 'encoding_confound')
+    if not args.force and encoding_confound_file_exists(out_dir):
+        print("[encoding_confound] Summary CSV already exists — skipping.")
+        set_item_status('encoding_confound', state='SKIPPED')
+        return 0
+    cmd = [sys.executable, '-u', 'analysis/encoding_confound.py',
+           '--config', args.config,
+           '--out', out_dir]
+    return run_cmd('encoding_confound', cmd,
+                   os.path.join(LOG_DIR, 'encoding_confound.log'), args.dry_run)
+
+
+def stage_channel_ablation(cfg, args):
+    """R7: test model under ablated channel variants (no GC skew / no HP stutter)."""
+    keys    = get_all_keys(cfg)
+    out_dir = os.path.join(cfg['paths']['results_dir'], 'channel_ablation')
+    rc_all  = 0
+    for key in keys:
+        name     = f'channel_ablation:{key}'
+        out_path = os.path.join(out_dir, f'{key}_channel_ablation.csv')
+        if not args.force and os.path.exists(os.path.join(ROOT, out_path)):
+            print(f"[channel_ablation] {key}: result already exists — skipping.")
+            set_item_status(name, state='SKIPPED')
+            continue
+        cmd = [sys.executable, '-u', 'analysis/channel_ablation.py',
+               '--config', args.config,
+               '--key', key,
+               '--models-dir', cfg['paths']['models_dir'],
+               '--out', out_dir]
+        rc = run_cmd(name, cmd,
+                     os.path.join(LOG_DIR, f'channel_ablation_{key}.log'),
+                     args.dry_run)
+        if rc != 0:
+            rc_all = rc
+            if not args.keep_going:
+                return rc_all
+    return rc_all
+
+
 def stage_figures(cfg, args):
     out_dir = cfg['paths']['figures_dir']
     if not args.force and figures_exist(out_dir):
@@ -334,13 +513,20 @@ def stage_ablation_and_shift_parallel(cfg, args):
 
 
 STAGE_FUNCS = {
-    'datasets': stage_datasets,
-    'train': stage_train,
-    'gate_check': stage_gate_check,
-    'allocation': stage_allocation,
-    'ablation': stage_ablation,
-    'distribution_shift': stage_distribution_shift,
-    'figures': stage_figures,
+    'datasets'              : stage_datasets,
+    'train'                 : stage_train,
+    'gate_check'            : stage_gate_check,
+    'threshold_sensitivity' : stage_threshold_sensitivity,
+    'calibration_regimes'   : stage_calibration_regimes,
+    'regime_evaluation'     : stage_regime_evaluation,
+    'allocation'            : stage_allocation,
+    'ablation'              : stage_ablation,
+    'distribution_shift'    : stage_distribution_shift,
+    'transfer_radius'       : stage_transfer_radius,
+    'shap_stability'        : stage_shap_stability,
+    'encoding_confound'     : stage_encoding_confound,
+    'channel_ablation'      : stage_channel_ablation,
+    'figures'               : stage_figures,
 }
 
 

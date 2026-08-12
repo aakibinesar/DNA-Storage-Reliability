@@ -4,23 +4,30 @@ analysis/distribution_shift.py
 Distribution shift experiments: train on one substitution regime, evaluate
 on another without retraining.
 
-Three transfer conditions (from implementation plan Week 7):
-  1. Mild      : train on 1%  → test on 5%
-  2. Moderate  : train on 5%  → test on 12%
-  3. Severe    : train on 1%  → test on 12%  (primary stress test)
+R12 extension
+-------------
+The original four conditions only tested upward shifts starting from 9% or
+12%.  R12 adds:
+  • symmetric downward transfers (higher sub_rate → lower)
+  • additional upward pairs to cover lower-rate sources (1%, 5%)
+  • `delta` (|tgt_rate − src_rate|) and `direction` ('up'/'down') per result
+  • `auroc_drop` and `robust_transfer_auroc` alongside the ECE criterion
+  • `compute_transfer_radius()` — formal radius = max δ where every tested
+    pair at |Δ| ≤ δ satisfies BOTH robustness thresholds
 
-For each transfer condition, compute:
-  - ECE (calibration quality on the target regime)
-  - Brier score
-  - PR-AUC (discrimination quality)
-  - FRR (failure reduction rate under allocation)
-  - Degradation ratio: FRR_transfer / FRR_in-distribution
-    (target > 0.8 for robust transfer — per implementation plan)
+This replaces the single "~3% transfer radius" claim with per-stratum,
+per-direction radius estimates that can differ across coverage depths and
+encoding schemes.  For a full systematic sweep of ALL sub_rate pairs using
+the saved calibrated models see analysis/transfer_radius.py.
+
+Robustness thresholds (same as ROBUST_ECE / ROBUST_AUROC in transfer_radius.py):
+  ECE degradation ratio  < 2.0   (< 2× ECE worsening)
+  AUROC drop             ≤ 0.05  (≤ 5 pp AUROC decrease)
 
 Usage:
-    python analysis/distribution_shift.py \
-        --config configs/experiment_config.yaml \
-        --coverage 30 --encoding simple \
+    python analysis/distribution_shift.py \\
+        --config configs/experiment_config.yaml \\
+        --coverage 5 --encoding simple \\
         --out results/distribution_shift/
 """
 
@@ -38,11 +45,25 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'allocation'))
 
 
 TRANSFER_CONDITIONS = [
-    (0.09, 0.12, 'mild'),
-    (0.09, 0.15, 'moderate'),
-    (0.09, 0.20, 'severe'),
-    (0.12, 0.18, 'moderate_high'),
+    # ── Upward transfers (train low, test high) ─────────────────────────────
+    (0.01, 0.05, 'up_very_low'),
+    (0.05, 0.09, 'up_low_to_mid'),
+    (0.09, 0.12, 'up_mild'),
+    (0.09, 0.15, 'up_moderate'),
+    (0.09, 0.20, 'up_severe'),
+    (0.12, 0.18, 'up_moderate_high'),
+    # ── Downward transfers (train high, test low) ───────────────────────────
+    (0.05, 0.01, 'down_very_low'),
+    (0.09, 0.05, 'down_low_to_mid'),
+    (0.12, 0.09, 'down_mild'),
+    (0.15, 0.09, 'down_moderate'),
+    (0.18, 0.12, 'down_moderate_high'),
+    (0.20, 0.09, 'down_severe'),
 ]
+
+# Robustness thresholds used by compute_transfer_radius()
+_ROBUST_ECE_RATIO   = 2.0   # ECE must not more than double
+_ROBUST_AUROC_DROP  = 0.05  # AUROC may not fall more than 5 pp
 
 
 def run_distribution_shift(
@@ -98,24 +119,35 @@ def run_distribution_shift(
         y_src_bin      = (y_te_src >= 0.5).astype(int)
         metrics_indist = full_evaluation(y_src_bin, proba_indist)
 
-        # Degradation ratio (primary: ECE degradation)
-        deg_ece = metrics_transfer['ece']   / max(metrics_indist['ece'],   1e-6)
+        # Degradation ratios
+        deg_ece   = metrics_transfer['ece']   / max(metrics_indist['ece'],   1e-6)
         deg_brier = metrics_transfer['brier'] / max(metrics_indist['brier'], 1e-6)
+        auroc_drop = metrics_indist['auroc'] - metrics_transfer['auroc']
+
+        robust_ece   = deg_ece < _ROBUST_ECE_RATIO
+        robust_auroc = auroc_drop <= _ROBUST_AUROC_DROP
+        robust_both  = robust_ece and robust_auroc
 
         results[label] = {
-            'severity'           : severity,
-            'src_rate'           : src_rate,
-            'tgt_rate'           : tgt_rate,
-            'transfer_ece'       : metrics_transfer['ece'],
-            'transfer_brier'     : metrics_transfer['brier'],
-            'transfer_pr_auc'    : metrics_transfer['pr_auc'],
-            'transfer_auroc'     : metrics_transfer['auroc'],
-            'indist_ece'         : metrics_indist['ece'],
-            'indist_brier'       : metrics_indist['brier'],
-            'indist_pr_auc'      : metrics_indist['pr_auc'],
-            'deg_ratio_ece'      : deg_ece,
-            'deg_ratio_brier'    : deg_brier,
-            'robust_transfer'    : deg_ece < 2.0,  # < 2x ECE degradation = robust
+            'severity'              : severity,
+            'src_rate'              : src_rate,
+            'tgt_rate'              : tgt_rate,
+            'delta'                 : abs(tgt_rate - src_rate),
+            'direction'             : 'up' if tgt_rate > src_rate else 'down',
+            'transfer_ece'          : metrics_transfer['ece'],
+            'transfer_brier'        : metrics_transfer['brier'],
+            'transfer_pr_auc'       : metrics_transfer['pr_auc'],
+            'transfer_auroc'        : metrics_transfer['auroc'],
+            'indist_ece'            : metrics_indist['ece'],
+            'indist_brier'          : metrics_indist['brier'],
+            'indist_pr_auc'         : metrics_indist['pr_auc'],
+            'indist_auroc'          : metrics_indist['auroc'],
+            'deg_ratio_ece'         : deg_ece,
+            'deg_ratio_brier'       : deg_brier,
+            'auroc_drop'            : auroc_drop,
+            'robust_transfer_ece'   : robust_ece,
+            'robust_transfer_auroc' : robust_auroc,
+            'robust_transfer'       : robust_both,  # BOTH thresholds must pass
         }
 
         if verbose:
@@ -155,20 +187,93 @@ def _config_key(sub_rate: float, coverage: int, encoding: str) -> str:
     return f'sub{int(sub_rate*100):02d}_k{coverage}_{encoding}'
 
 
+def compute_transfer_radius(
+    results: Dict[str, dict],
+    auroc_threshold: float = _ROBUST_AUROC_DROP,
+    ece_threshold:   float = _ROBUST_ECE_RATIO,
+) -> Dict[str, dict]:
+    """Compute formal per-direction transfer radius from a results dict.
+
+    Transfer radius (per direction) = max δ such that *every* tested pair
+    with |Δ| ≤ δ satisfies both robustness thresholds.  Pairs are evaluated
+    in ascending order of δ; the radius stops at the first delta where any
+    pair fails.
+
+    Parameters
+    ----------
+    results : output of run_distribution_shift()
+    auroc_threshold : max acceptable AUROC drop (default 0.05)
+    ece_threshold   : max acceptable ECE degradation ratio (default 2.0)
+
+    Returns
+    -------
+    dict with keys 'up' and 'down', each containing:
+        transfer_radius      : max passing δ (0 if no pair passes)
+        first_failing_delta  : smallest δ where any pair fails (inf if none fail)
+        n_pairs_tested       : number of pairs in that direction
+        n_pairs_robust       : number passing both thresholds
+    """
+    from collections import defaultdict
+
+    by_dir: Dict[str, List[dict]] = defaultdict(list)
+    for row in results.values():
+        d = row.get('direction', 'up')
+        by_dir[d].append(row)
+
+    summary: Dict[str, dict] = {}
+    for direction, rows in by_dir.items():
+        # Group by unique delta values, ascending
+        delta_map: Dict[float, List[dict]] = defaultdict(list)
+        for r in rows:
+            delta_map[round(r['delta'], 6)].append(r)
+
+        radius           = 0.0
+        first_failing    = float('inf')
+        found_failure    = False
+
+        for delta in sorted(delta_map):
+            pairs_at_delta = delta_map[delta]
+            robust_here = all(
+                (r['deg_ratio_ece']   < ece_threshold) and
+                (r['auroc_drop']      <= auroc_threshold)
+                for r in pairs_at_delta
+            )
+            if robust_here and not found_failure:
+                radius = delta
+            else:
+                if not found_failure:
+                    first_failing = delta
+                found_failure = True
+
+        summary[direction] = {
+            'transfer_radius'     : radius,
+            'first_failing_delta' : first_failing,
+            'n_pairs_tested'      : len(rows),
+            'n_pairs_robust'      : sum(
+                1 for r in rows
+                if r['deg_ratio_ece'] < ece_threshold and r['auroc_drop'] <= auroc_threshold
+            ),
+        }
+
+    return summary
+
+
 def print_shift_table(results: Dict[str, dict]):
     """Print distribution shift summary table."""
-    metrics = ['transfer_ece', 'indist_ece', 'deg_ratio_ece',
-               'transfer_pr_auc', 'indist_pr_auc', 'robust_transfer']
-    print(f"\n{'Condition':<35}" + ''.join(f"{m:>18}" for m in metrics))
-    print('-' * (35 + 18 * len(metrics)))
+    cols = ['dir', 'delta', 'indist_auroc', 'transfer_auroc', 'auroc_drop',
+            'deg_ratio_ece', 'robust_transfer']
+    print(f"\n{'Condition':<38}" + ''.join(f"{c:>16}" for c in cols))
+    print('-' * (38 + 16 * len(cols)))
     for label, row in results.items():
-        line = f"{label:<35}"
-        for m in metrics:
-            v = row.get(m, float('nan'))
+        line = f"{label:<38}"
+        for c in cols:
+            v = row.get(c, float('nan'))
             if isinstance(v, bool):
-                line += f"{'YES' if v else 'NO':>18}"
+                line += f"{'YES' if v else 'NO':>16}"
+            elif isinstance(v, str):
+                line += f"{v:>16}"
             else:
-                line += f"{v:>18.4f}"
+                line += f"{v:>16.4f}"
         print(line)
 
 
@@ -221,8 +326,24 @@ def main():
     )
     print_shift_table(results)
 
+    # Formal transfer radius per direction
+    radius_summary = compute_transfer_radius(results)
+    print('\n  Transfer radius summary:')
+    for direction, s in radius_summary.items():
+        print(f"    {direction}: radius={s['transfer_radius']:.3f}  "
+              f"first_fail={s['first_failing_delta']:.3f}  "
+              f"robust={s['n_pairs_robust']}/{s['n_pairs_tested']}")
+
     out_path = os.path.join(args.out, f'dist_shift_k{args.coverage}_{args.encoding}.csv')
     save_shift_results(results, out_path)
+
+    # Save radius summary
+    import pandas as pd
+    radius_rows = [{'direction': d, **v} for d, v in radius_summary.items()]
+    radius_path = os.path.join(args.out, f'transfer_radius_k{args.coverage}_{args.encoding}.csv')
+    os.makedirs(os.path.dirname(radius_path) or '.', exist_ok=True)
+    pd.DataFrame(radius_rows).to_csv(radius_path, index=False, float_format='%.6f')
+    print(f"  [dist_shift] Radius summary saved to {radius_path}")
 
 
 if __name__ == '__main__':
