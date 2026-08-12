@@ -131,7 +131,7 @@ results/
 └── figures/
     ├── fig2_reliability_diagrams.png
     ├── fig3_shap_importance.png
-    ├── fig4_frr_vs_delta.png
+    ├── fig4_ofr_vs_delta.png
     ├── fig_s1_feature_distributions.png
     └── fig_s4_cost_reliability.png
 ```

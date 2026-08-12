@@ -104,39 +104,64 @@ class CalibratedModel:
         return (self.predict_proba(X) >= threshold).astype(int)
 
     def _raw_proba(self, X: np.ndarray) -> np.ndarray:
-        """Get raw (uncalibrated) probabilities from the base model."""
-        proba = self.base_model.predict_proba(X)
-        if proba.ndim == 2:
-            if proba.shape[1] >= 2:
-                return proba[:, 1]
-            return np.zeros(proba.shape[0])  # single-class model; failure prob = 0
-        return proba
+        """Get raw (uncalibrated) probability estimates from the base model.
+
+        Supports classifiers (predict_proba) and regressors (predict).
+        """
+        if hasattr(self.base_model, 'predict_proba'):
+            proba = self.base_model.predict_proba(X)
+            if proba.ndim == 2:
+                if proba.shape[1] >= 2:
+                    return proba[:, 1]
+                return np.zeros(proba.shape[0])
+            return proba
+        # Regressor path: XGBRegressor / RandomForestRegressor output [0, 1] directly
+        return np.clip(self.base_model.predict(X), 0.0, 1.0)
 
 
 # ── Internal calibration components ─────────────────────────────────────────
 
 class _PlattScaler:
-    """Logistic regression on sigmoid-transformed model scores."""
+    """Platt scaling via direct NLL minimisation — supports continuous targets in [0, 1].
+
+    Fits A, B in sigma(A * logit(raw) + B) to minimise cross-entropy against y,
+    where y may be a continuous empirical failure frequency (R1 compatible).
+    Replaces the previous LogisticRegression approach, which rejected continuous y.
+    """
 
     def __init__(self):
-        self._lr = None
+        self._A: float = 1.0
+        self._B: float = 0.0
+        self._fitted: bool = False
 
     def fit(self, proba: np.ndarray, y: np.ndarray):
-        from sklearn.linear_model import LogisticRegression  # type: ignore
-        if len(np.unique(y)) < 2:
-            self._lr = None  # single-class cal set; skip calibration
+        from scipy.optimize import minimize  # type: ignore
+
+        y = np.asarray(y, dtype=float)
+        if float(y.max() - y.min()) < 1e-8:
+            self._fitted = False  # degenerate cal set; skip
             return
+
         logits = np.log(np.clip(proba, 1e-10, 1 - 1e-10)) - \
                  np.log(np.clip(1 - proba, 1e-10, 1 - 1e-10))
-        self._lr = LogisticRegression(max_iter=1000, C=1e10)
-        self._lr.fit(logits.reshape(-1, 1), y)
+
+        def neg_ll(params):
+            A, B = params
+            p = 1.0 / (1.0 + np.exp(-(A * logits + B)))
+            p = np.clip(p, 1e-10, 1 - 1e-10)
+            return -float(np.mean(y * np.log(p) + (1 - y) * np.log(1 - p)))
+
+        result = minimize(neg_ll, [1.0, 0.0], method='L-BFGS-B',
+                          options={'maxiter': 1000, 'ftol': 1e-12})
+        self._A, self._B = float(result.x[0]), float(result.x[1])
+        self._fitted = True
 
     def predict(self, proba: np.ndarray) -> np.ndarray:
-        if self._lr is None:
-            return proba  # no calibration applied; return raw proba
+        if not self._fitted:
+            return proba
         logits = np.log(np.clip(proba, 1e-10, 1 - 1e-10)) - \
                  np.log(np.clip(1 - proba, 1e-10, 1 - 1e-10))
-        return self._lr.predict_proba(logits.reshape(-1, 1))[:, 1]
+        return 1.0 / (1.0 + np.exp(-(self._A * logits + self._B)))
 
 
 def _fit_temperature(proba: np.ndarray, y: np.ndarray) -> float:

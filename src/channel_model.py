@@ -133,6 +133,7 @@ class DNAStorageChannel:
         pcr_bias:          float         = 0.05,
         decay_loss:        float         = 0.02,
         seq_sub_rate:      float         = 0.002,
+        hp_stutter:        float         = _HP_STUTTER,
         seed:              Optional[int] = None,
     ) -> None:
         self.sub_rate          = sub_rate
@@ -146,6 +147,7 @@ class DNAStorageChannel:
         self.pcr_bias          = pcr_bias
         self.decay_loss        = decay_loss
         self.seq_sub_rate      = seq_sub_rate
+        self.hp_stutter        = hp_stutter
         self._rng              = np.random.default_rng(seed)
 
         self._tsub_synth = _build_tsub_cumulative(sub_rate + synthesis_sub)
@@ -201,6 +203,7 @@ class DNAStorageChannel:
             pcr_bias         = self.pcr_bias,
             decay_loss       = self.decay_loss,
             seq_sub_rate     = self.seq_sub_rate,
+            hp_stutter       = self.hp_stutter,
             seed             = seed,
         )
 
@@ -234,7 +237,7 @@ class DNAStorageChannel:
 
         # HP stutter coverage loss
         hp_extra   = max(0, max_hp_run - 2)
-        hp_factor  = 1.0 / (1.0 + _HP_STUTTER * hp_extra)
+        hp_factor  = 1.0 / (1.0 + self.hp_stutter * hp_extra)
 
         combined   = gc_factor * hp_factor
         return max(1, int(round(coverage * combined)))
@@ -423,5 +426,58 @@ def build_channel_from_config(
         pcr_bias         = ch['pcr_bias'],
         decay_loss       = ch['decay_loss_rate'],
         seq_sub_rate     = ch['sequencing_sub_rate'],
+        hp_stutter       = ch.get('hp_stutter', _HP_STUTTER),
+        seed             = seed,
+    )
+
+
+# R7: ablation variants for channel-mechanism validation
+_ABLATION_VARIANTS = {
+    'full'          : dict(),                              # original channel — reference
+    'no_gc_skew'    : dict(pcr_bias=0.0),                 # disable GC-coverage bias
+    'no_hp_stutter' : dict(hp_stutter=0.0),               # disable HP stutter coverage loss
+    'flat_skew'     : dict(pcr_bias=0.0, hp_stutter=0.0), # both mechanisms disabled
+}
+
+
+def build_ablated_channel(
+    cfg:      dict,
+    sub_rate: float,
+    ablation: str,
+    seed:     Optional[int] = None,
+) -> DNAStorageChannel:
+    """Build a channel with one or both reliability-skew mechanisms disabled.
+
+    Parameters
+    ----------
+    ablation : one of 'full', 'no_gc_skew', 'no_hp_stutter', 'flat_skew'
+        'full'          — identical to build_channel_from_config (reference)
+        'no_gc_skew'    — pcr_bias=0  → gc_factor=1 for all sequences
+        'no_hp_stutter' — hp_stutter=0 → hp_factor=1 for all sequences
+        'flat_skew'     — both mechanisms off; failures driven by sub/indel rates only
+
+    Used in analysis/channel_ablation.py to test whether model predictions
+    degrade when the injected reliability-skew features are removed (R7 fix).
+    """
+    if ablation not in _ABLATION_VARIANTS:
+        raise ValueError(
+            f"Unknown ablation '{ablation}'. "
+            f"Choose from: {list(_ABLATION_VARIANTS)}"
+        )
+    overrides = _ABLATION_VARIANTS[ablation]
+    ch = cfg['channel']
+    return DNAStorageChannel(
+        sub_rate         = sub_rate,
+        indel_rate       = ch['indel_rate'],
+        ins_fraction     = ch['ins_del_ratio'],
+        n_initial_copies = ch['n_initial_copies'],
+        synthesis_sub    = ch['synthesis_sub_rate'],
+        synthesis_indel  = ch['synthesis_del_rate'] + ch['synthesis_ins_rate'],
+        pcr_cycles       = ch['n_pcr_cycles'],
+        pcr_fidelity     = ch['pcr_fidelity'],
+        pcr_bias         = overrides.get('pcr_bias',    ch['pcr_bias']),
+        decay_loss       = ch['decay_loss_rate'],
+        seq_sub_rate     = ch['sequencing_sub_rate'],
+        hp_stutter       = overrides.get('hp_stutter',  ch.get('hp_stutter', _HP_STUTTER)),
         seed             = seed,
     )

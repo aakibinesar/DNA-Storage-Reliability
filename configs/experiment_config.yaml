@@ -95,6 +95,12 @@ evaluation:
   auroc: true
   pr_auc: true
   reliability_diagram: true
+  # R11: regime thresholds for stratified metric reporting.
+  # Sequences with failure_freq < regime_lo are "under-failure" (trivially predictable);
+  # those with failure_freq > regime_hi are "saturated" (also trivial).
+  # The "informative" regime [lo, hi] is where genuine discrimination is needed.
+  regime_lo: 0.15
+  regime_hi: 0.85
 
 # ----- Dataset splits -----
 splits:

@@ -178,19 +178,47 @@ def uniform_allocation(N: int, l_rs_default: int) -> np.ndarray:
     return np.full(N, l_rs_default, dtype=int)
 
 
-def oracle_allocation(
+def oracle_allocation_baseline(
     empirical_failure_freq: np.ndarray,
     l_rs_default: int,
     delta: int,
     l_rs_min: int = 4,
     l_rs_max: int = 16,
 ) -> np.ndarray:
-    """Oracle: use true empirical failure frequency as the risk score.
+    """Baseline risk-ranking oracle: ranks by failure frequency at default parity.
 
-    Represents the theoretical ceiling — what a perfect predictor would achieve.
+    NOTE: this is NOT a true allocation oracle. A sequence with high baseline
+    failure_freq may gain nothing from extra parity (e.g., if it is already in
+    the over-failure regime). Use oracle_allocation_marginal for a valid oracle.
+    Retained here as a diagnostic reference baseline.
     """
     alloc = AllocationMechanism(l_rs_default, delta, l_rs_min, l_rs_max)
     return alloc.allocate(empirical_failure_freq)
+
+
+def oracle_allocation_marginal(
+    marginal_benefits: np.ndarray,
+    l_rs_default: int,
+    delta: int,
+    l_rs_min: int = 4,
+    l_rs_max: int = 16,
+) -> np.ndarray:
+    """True oracle: rank sequences by marginal failure reduction from extra parity.
+
+    Parameters
+    ----------
+    marginal_benefits : array (N,) of p_i(l_rs_default) - p_i(l_rs_default + delta).
+                        Positive = sequence benefits from promotion; zero/negative =
+                        extra parity does not help.
+
+    Returns
+    -------
+    Budget-neutral parity allocation ranked by marginal benefit.
+    Sequences with the highest benefit are promoted to l_rs_default + delta;
+    sequences with the lowest benefit are demoted to l_rs_default - delta.
+    """
+    alloc = AllocationMechanism(l_rs_default, delta, l_rs_min, l_rs_max)
+    return alloc.allocate(marginal_benefits)
 
 
 def miscalibrated_allocation(

@@ -32,19 +32,28 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
 def train_all_models(
     X_train: np.ndarray,
-    y_train: np.ndarray,
+    y_train: np.ndarray,  # continuous failure_freq in [0, 1]
     X_val:   np.ndarray,
-    y_val:   np.ndarray,
+    y_val:   np.ndarray,  # continuous failure_freq in [0, 1] — HP tuning only
+    X_cal:   np.ndarray,  # independent calibration set (not seen during HP tuning)
+    y_cal:   np.ndarray,  # continuous failure_freq in [0, 1]
     cfg:     dict,
     seed:    int = 42,
     verbose: bool = True,
 ) -> Dict[str, Any]:
     """Train XGBoost, Random Forest, and Logistic Regression models.
 
+    y_train / y_val / y_cal are continuous empirical failure frequencies in [0, 1].
+    XGBoost and Random Forest regress on these directly (R1 fix: target is the
+    expected per-run failure probability, not the majority-fail binary label).
+    Logistic Regression uses binarised labels and is a majority-fail discriminator.
+    Calibration is fit on the independent X_cal / y_cal split (R6 fix).
+
     Parameters
     ----------
-    X_train, y_train : training features and soft labels (failure frequency)
-    X_val,   y_val   : validation features and labels
+    X_train, y_train : training features and continuous failure_freq
+    X_val,   y_val   : tuning features and labels (HP selection only)
+    X_cal,   y_cal   : independent calibration set (never used for HP tuning)
     cfg              : full experiment config dict
     seed             : random seed
 
@@ -56,15 +65,15 @@ def train_all_models(
     from sklearn.preprocessing import StandardScaler  # type: ignore
     from calibrate import CalibratedModel
 
-    # Binary labels for classification models
+    # Binary labels used only for LR (discriminator) and class-balance checks
     y_train_bin = (y_train >= 0.5).astype(int)
     y_val_bin   = (y_val   >= 0.5).astype(int)
 
-    # Check class balance
-    pos_frac = y_train_bin.mean()
+    # Check class balance using binarised labels
+    pos_frac = float(y_train_bin.mean())
     if verbose:
         print(f"  Class balance: pos_frac={pos_frac:.4f} "
-              f"({'IMBALANCED — using sample weights' if pos_frac < 0.05 else 'OK'})")
+              f"({'IMBALANCED' if pos_frac < 0.05 or pos_frac > 0.95 else 'OK'})")
 
     # Single-class guard: classifiers require at least 2 classes
     if len(np.unique(y_train_bin)) < 2:
@@ -78,7 +87,7 @@ def train_all_models(
         scaler = StandardScaler()
         scaler.fit(X_train)
         dummy_cal = CalibratedModel(dummy, method='none')
-        dummy_cal.fit(X_val, y_val_bin)
+        dummy_cal.fit(X_cal, y_cal)
         return {
             'xgboost': dummy_cal,
             'random_forest': dummy_cal,
@@ -86,44 +95,46 @@ def train_all_models(
             'logistic_scaler': scaler,
         }
 
-    sample_weights = None
+    # Sample weights for LR only (imbalanced binary classification)
+    lr_sample_weights = None
     if pos_frac < 0.05 or pos_frac > 0.95:
-        # Inverse-frequency weighting
         n_pos  = y_train_bin.sum()
         n_neg  = len(y_train_bin) - n_pos
         w_pos  = len(y_train_bin) / (2 * max(n_pos, 1))
         w_neg  = len(y_train_bin) / (2 * max(n_neg, 1))
-        sample_weights = np.where(y_train_bin == 1, w_pos, w_neg)
+        lr_sample_weights = np.where(y_train_bin == 1, w_pos, w_neg)
 
     results = {}
 
-    # ── 1. XGBoost ────────────────────────────────────────────────────────────
+    # ── 1. XGBoost — regressor on continuous failure_freq (R1 fix) ───────────
     if verbose:
         print("  Training XGBoost ...")
     xgb_model = _train_xgboost(
-        X_train, y_train_bin, X_val, y_val_bin,
-        cfg['models']['xgboost'], seed, sample_weights
+        X_train, y_train, X_val, y_val,
+        cfg['models']['xgboost'], seed, weights=None
     )
     xgb_calibrated = CalibratedModel(xgb_model, method='platt', seed=seed)
-    xgb_calibrated.fit(X_val, y_val_bin)
+    xgb_calibrated.fit(X_cal, y_cal)   # R6 fix: independent calibration set
     results['xgboost'] = xgb_calibrated
     if verbose:
-        print(f"    XGBoost fitted (best params logged internally)")
+        print(f"    XGBoost fitted")
 
-    # ── 2. Random Forest ─────────────────────────────────────────────────────
+    # ── 2. Random Forest — regressor on continuous failure_freq (R1 fix) ─────
     if verbose:
         print("  Training Random Forest ...")
     rf_model = _train_random_forest(
-        X_train, y_train_bin, X_val, y_val_bin,
-        cfg['models']['random_forest'], seed, sample_weights
+        X_train, y_train, X_val, y_val,
+        cfg['models']['random_forest'], seed, weights=None
     )
     rf_calibrated = CalibratedModel(rf_model, method='isotonic', seed=seed)
-    rf_calibrated.fit(X_val, y_val_bin)
+    rf_calibrated.fit(X_cal, y_cal)    # R6 fix: independent calibration set
     results['random_forest'] = rf_calibrated
     if verbose:
         print(f"    Random Forest fitted")
 
-    # ── 3. Logistic Regression ────────────────────────────────────────────────
+    # ── 3. Logistic Regression — binary majority-fail discriminator ───────────
+    # LR uses binarised labels. Its output is P(majority_fail), not the expected
+    # per-run failure probability. Treated as a risk-ranking baseline.
     if verbose:
         print("  Training Logistic Regression ...")
     scaler   = StandardScaler()
@@ -131,7 +142,7 @@ def train_all_models(
     X_val_s  = scaler.transform(X_val)
     lr_model = _train_logistic_regression(
         X_tr_s, y_train_bin, X_val_s, y_val_bin,
-        cfg['models']['logistic_regression'], seed, sample_weights
+        cfg['models']['logistic_regression'], seed, lr_sample_weights
     )
     results['logistic_regression'] = lr_model
     results['logistic_scaler']     = scaler
@@ -144,19 +155,24 @@ def train_all_models(
 # ── Model-specific trainers ───────────────────────────────────────────────────
 
 def _train_xgboost(X_tr, y_tr, X_val, y_val, xgb_cfg, seed, weights=None):
-    """Grid search over XGBoost hyperparameters, select on val Brier score."""
+    """Grid search over XGBoost hyperparameters, select on val Brier score.
+
+    Uses XGBRegressor with reg:logistic objective to regress directly on
+    continuous failure_freq targets (R1 fix). Brier score is MSE against
+    the continuous targets.
+    """
     try:
         import xgboost as xgb  # type: ignore
     except ImportError:
         raise ImportError("xgboost required: pip install xgboost")
-    from sklearn.metrics import brier_score_loss  # type: ignore
 
     best_model, best_brier = None, np.inf
 
     for depth in xgb_cfg['max_depth']:
         for lr in xgb_cfg['learning_rate']:
             for n_est in xgb_cfg['n_estimators']:
-                clf = xgb.XGBClassifier(
+                reg = xgb.XGBRegressor(
+                    objective='reg:logistic',
                     max_depth=depth,
                     learning_rate=lr,
                     n_estimators=n_est,
@@ -171,31 +187,34 @@ def _train_xgboost(X_tr, y_tr, X_val, y_val, xgb_cfg, seed, weights=None):
                 if weights is not None:
                     fit_params['sample_weight'] = weights
 
-                clf.fit(
+                reg.fit(
                     X_tr, y_tr,
                     eval_set=[(X_val, y_val)],
                     verbose=False,
                     **fit_params,
                 )
-                proba   = clf.predict_proba(X_val)[:, 1]
-                brier   = brier_score_loss(y_val, proba)
+                preds = np.clip(reg.predict(X_val), 0.0, 1.0)
+                brier = float(np.mean((y_val - preds) ** 2))
 
                 if brier < best_brier:
-                    best_brier, best_model = brier, clf
+                    best_brier, best_model = brier, reg
 
     return best_model
 
 
 def _train_random_forest(X_tr, y_tr, X_val, y_val, rf_cfg, seed, weights=None):
-    """Grid search Random Forest on validation Brier score."""
-    from sklearn.ensemble import RandomForestClassifier  # type: ignore
-    from sklearn.metrics import brier_score_loss          # type: ignore
+    """Grid search Random Forest regressor on validation Brier score.
+
+    Uses RandomForestRegressor to regress directly on continuous failure_freq
+    targets (R1 fix). Brier score is MSE against the continuous targets.
+    """
+    from sklearn.ensemble import RandomForestRegressor  # type: ignore
 
     best_model, best_brier = None, np.inf
 
     for depth in rf_cfg['max_depth']:
         for min_leaf in rf_cfg['min_samples_leaf']:
-            clf = RandomForestClassifier(
+            reg = RandomForestRegressor(
                 n_estimators=rf_cfg['n_estimators'],
                 max_depth=depth,
                 min_samples_leaf=min_leaf,
@@ -205,13 +224,13 @@ def _train_random_forest(X_tr, y_tr, X_val, y_val, rf_cfg, seed, weights=None):
             fit_params = {}
             if weights is not None:
                 fit_params['sample_weight'] = weights
-            clf.fit(X_tr, y_tr, **fit_params)
+            reg.fit(X_tr, y_tr, **fit_params)
 
-            proba = clf.predict_proba(X_val)[:, 1]
-            brier = brier_score_loss(y_val, proba)
+            preds = np.clip(reg.predict(X_val), 0.0, 1.0)
+            brier = float(np.mean((y_val - preds) ** 2))
 
             if brier < best_brier:
-                best_brier, best_model = brier, clf
+                best_brier, best_model = brier, reg
 
     return best_model
 
@@ -315,7 +334,17 @@ def main():
     X_tr, X_val, X_te, y_tr, y_val, y_te, feat_names = load_dataset(args.key, cfg)
     print(f"  train={len(y_tr)}, val={len(y_val)}, test={len(y_te)}, features={X_tr.shape[1]}")
 
-    models = train_all_models(X_tr, y_tr, X_val, y_val, cfg, seed=cfg['random_seed'], verbose=True)
+    # Split val into tune (HP selection) and cal (calibration fitting) — R6 fix
+    rng  = np.random.default_rng(cfg['random_seed'])
+    perm = rng.permutation(len(X_val))
+    mid  = len(perm) // 2
+    tune_idx, cal_idx = perm[:mid], perm[mid:]
+    X_tune, y_tune = X_val[tune_idx], y_val[tune_idx]
+    X_cal,  y_cal  = X_val[cal_idx],  y_val[cal_idx]
+    print(f"  val split → tune={len(y_tune)}, cal={len(y_cal)}")
+
+    models = train_all_models(X_tr, y_tr, X_tune, y_tune, X_cal, y_cal,
+                               cfg, seed=cfg['random_seed'], verbose=True)
     save_models(models, args.out, args.key)
     print(f"[train] Models saved to {args.out}")
 

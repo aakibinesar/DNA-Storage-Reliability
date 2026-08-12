@@ -14,6 +14,22 @@ Label definition (from the implementation plan):
 These soft probabilistic labels serve as regression targets for model training
 and also generate binary labels (threshold at 0.5) for classification metrics.
 
+R8 note — label noise at M=30
+------------------------------
+With M=30 independent runs, a sequence whose true failure probability is p has
+empirical failure_freq drawn from Binomial(30, p)/30.  At p=0.5 the standard
+error is 0.5/√30 ≈ 0.091, so the 95% Wilson CI spans ±0.18 around the
+threshold.  Sequences with true p ∈ (0.32, 0.68) may be mislabelled by the
+binary 0.5 rule.
+
+Mitigations implemented here:
+  - `label_confidence_intervals`: Wilson score 95% CI per sequence.
+  - `near_threshold_stats`: fraction of sequences with uncertain labels.
+  - `save_labels`: stores `label_ci_lo`, `label_ci_hi`, `near_threshold` columns.
+  - Use `failure_freq` (continuous) as the primary regression target; binary
+    labels are secondary.  See `analysis/threshold_sensitivity.py` for a sweep
+    of F1/Brier across thresholds 0.1–0.9.
+
 Usage (CLI):
     python label_generator.py --config configs/experiment_config.yaml \
         --seqs data/sequences/seqs_simple_n2000.txt \
@@ -136,6 +152,87 @@ def sanity_check(
     }
 
 
+def label_confidence_intervals(
+    failure_freq: np.ndarray,
+    n_runs: int,
+    alpha: float = 0.05,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Wilson score confidence intervals for per-sequence failure_freq estimates.
+
+    Each failure_freq is an empirical proportion k/n_runs from Bernoulli trials.
+    At M=30 and p≈0.5 the 95% CI half-width is ≈ ±0.18, so sequences with
+    true p ∈ (0.32, 0.68) have genuinely uncertain binary labels.
+
+    Parameters
+    ----------
+    failure_freq : ndarray (N,) — empirical failure fraction ∈ [0, 1]
+    n_runs       : M — number of independent MC trials
+    alpha        : significance level (0.05 → 95% CI)
+
+    Returns
+    -------
+    ci_lo, ci_hi : ndarrays (N,) — lower and upper Wilson score CI bounds
+    """
+    from scipy.stats import norm  # type: ignore
+    z = float(norm.ppf(1.0 - alpha / 2.0))
+
+    p = np.clip(np.asarray(failure_freq, dtype=float), 0.0, 1.0)
+    n = int(n_runs)
+    denom  = 1.0 + z ** 2 / n
+    center = (p + z ** 2 / (2.0 * n)) / denom
+    half   = (z / denom) * np.sqrt(p * (1.0 - p) / n + z ** 2 / (4.0 * n ** 2))
+
+    ci_lo = np.clip(center - half, 0.0, 1.0)
+    ci_hi = np.clip(center + half, 0.0, 1.0)
+    return ci_lo, ci_hi
+
+
+def near_threshold_stats(
+    failure_freq: np.ndarray,
+    n_runs: int,
+    threshold: float = 0.5,
+    alpha: float = 0.05,
+) -> dict:
+    """Report what fraction of sequences have genuinely uncertain binary labels.
+
+    A sequence is "near-threshold" when its (1−alpha) Wilson CI spans the
+    threshold, meaning the M Monte Carlo runs do not provide enough evidence to
+    confidently assign a binary label.
+
+    Parameters
+    ----------
+    failure_freq : ndarray (N,) — empirical failure fraction
+    n_runs       : M — Monte Carlo runs used to produce failure_freq
+    threshold    : binary classification threshold (typically 0.5)
+    alpha        : significance level for the CI (0.05 → 95%)
+
+    Returns
+    -------
+    dict with keys: n_total, n_near_threshold, frac_near, ci_width_mean,
+    ci_width_near_threshold, threshold, n_runs, alpha
+    """
+    ci_lo, ci_hi = label_confidence_intervals(failure_freq, n_runs, alpha)
+    spans_threshold = (ci_lo < threshold) & (ci_hi >= threshold)
+    n_near  = int(spans_threshold.sum())
+    n_total = len(failure_freq)
+
+    ci_width = ci_hi - ci_lo
+    near_mask = np.abs(failure_freq - threshold) <= 0.15
+    ci_at_thresh = (float(ci_width[near_mask].mean())
+                    if near_mask.any() else float('nan'))
+
+    return {
+        'n_total'                 : n_total,
+        'n_near_threshold'        : n_near,
+        'frac_near'               : float(n_near / n_total) if n_total > 0 else 0.0,
+        'ci_width_mean'           : float(ci_width.mean()),
+        'ci_width_near_threshold' : ci_at_thresh,
+        'threshold'               : threshold,
+        'n_runs'                  : n_runs,
+        'alpha'                   : alpha,
+    }
+
+
 def load_sequences(path: str) -> List[str]:
     """Load sequences from a tab-separated file (first column = DNA string)."""
     seqs = []
@@ -154,17 +251,31 @@ def save_labels(
     byte_errors_mean: np.ndarray,
     out_path: str,
     metadata: Optional[dict] = None,
+    n_runs: int = 30,
+    label_threshold: float = 0.5,
 ):
     """Save labeled dataset to a Parquet file (pandas required).
 
-    Falls back to CSV if pandas/pyarrow not available.
+    Stores Wilson score 95% CI columns so downstream analysis can quantify
+    label uncertainty without re-running the channel (R8 mitigation).
+
+    Parameters
+    ----------
+    n_runs          : MC runs used — required for CI computation
+    label_threshold : threshold for `label_binary`; 0.5 is a working convention
+                      with no operational grounding (acknowledged per R8)
     """
     import pandas as pd  # type: ignore
+    ci_lo, ci_hi = label_confidence_intervals(failure_freq, n_runs)
     df = pd.DataFrame({
-        'dna_sequence'   : sequences,
-        'failure_freq'   : failure_freq,
+        'dna_sequence'    : sequences,
+        'failure_freq'    : failure_freq,
         'byte_errors_mean': byte_errors_mean,
-        'label_binary'   : (failure_freq >= 0.5).astype(int),
+        'label_binary'    : (failure_freq >= label_threshold).astype(int),
+        'label_ci_lo'     : ci_lo,
+        'label_ci_hi'     : ci_hi,
+        'label_ci_width'  : ci_hi - ci_lo,
+        'near_threshold'  : ((ci_lo < label_threshold) & (ci_hi >= label_threshold)).astype(int),
     })
     if metadata:
         for k, v in metadata.items():
@@ -219,13 +330,17 @@ def main():
     )
 
     meta = dict(sub_rate=args.sub_rate, coverage=args.coverage, l_rs=l_rs, n_runs=n_runs)
-    df = save_labels(sequences, failure_freq, byte_errors_mean, args.out, meta)
+    df = save_labels(sequences, failure_freq, byte_errors_mean, args.out, meta,
+                     n_runs=n_runs)
 
+    nt = near_threshold_stats(failure_freq, n_runs)
     print(f"[label_generator] Saved {len(df)} rows to {args.out}")
     print(f"  Label stats: mean={failure_freq.mean():.4f}, "
           f"std={failure_freq.std():.4f}, "
           f"frac>0 = {(failure_freq > 0).mean():.3f}, "
           f"frac>=0.5 = {(failure_freq >= 0.5).mean():.3f}")
+    print(f"  Label uncertainty (R8): near-threshold = {nt['n_near_threshold']}/{nt['n_total']} "
+          f"({nt['frac_near']:.1%}), mean 95%-CI width = {nt['ci_width_mean']:.3f}")
 
 
 if __name__ == '__main__':
