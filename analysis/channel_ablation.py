@@ -241,7 +241,7 @@ def main():
     os.makedirs(args.out, exist_ok=True)
     out_path = os.path.join(args.out, f'{args.key}_channel_ablation.csv')
     results_df.to_csv(out_path, index=False)
-    print(f"\n[channel_ablation] Saved → {out_path}")
+    print(f"\n[channel_ablation] Saved -> {out_path}")
     print(results_df.to_string(index=False))
 
 

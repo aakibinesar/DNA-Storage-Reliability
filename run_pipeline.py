@@ -555,9 +555,9 @@ def print_status_report():
         rc = entry.get('returncode', '')
         print(f"{name:<45} {state:<10} {started:<20} {heartbeat:<20} {rc}")
         if state == 'RUNNING' and entry.get('last_log_line'):
-            print(f"   ↳ {entry['last_log_line'][:100]}")
+            print(f"   -> {entry['last_log_line'][:100]}")
         if state == 'FAILED':
-            print(f"   ↳ see {entry.get('log')}")
+            print(f"   -> see {entry.get('log')}")
 
     states = [e.get('state') for e in status.values()]
     print('-' * 110)

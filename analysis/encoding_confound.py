@@ -319,7 +319,7 @@ def main():
     print(f"[encoding_confound] Saved {len(all_summaries)} summary rows -> {summary_path}")
 
     # Defensible claim summary
-    print('\n  ── Defensible claim (replace raw encoding comparison) ──')
+    print('\n  -- Defensible claim (replace raw encoding comparison) --')
     print(f"  {'Sub':<6} {'Cov':<5} {'raw_eff':>10} "
           f"{'adj_eff':>10} {'confound%':>10} {'out_of_supp%':>14}")
     print(f"  {'-' * 60}")

@@ -321,7 +321,7 @@ def main():
 
     # Sanity check on a small subset first
     check = sanity_check(sequences, channel, args.coverage, l_rs)
-    print(f"  Sanity check → pass={check['pass']}, "
+    print(f"  Sanity check -> pass={check['pass']}, "
           f"failure_rate={check['failure_rate']:.4f}, "
           f"mean_byte_errors={check['mean_byte_errors']:.3f}")
 

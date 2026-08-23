@@ -139,7 +139,7 @@ def build_all_datasets(cfg: dict, verbose: bool = True):
                     'mean_failure_freq': failure_freq.mean(),
                 })
                 if verbose:
-                    print(f"  → saved {key} | failure_rate={fail_rate:.4f} | "
+                    print(f"  -> saved {key} | failure_rate={fail_rate:.4f} | "
                           f"mean_freq={failure_freq.mean():.4f}")
 
     # Print summary table
