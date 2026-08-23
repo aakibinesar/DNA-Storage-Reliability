@@ -100,7 +100,7 @@ def run_distribution_shift(
             continue
 
         if verbose:
-            print(f"  [dist_shift] {label} | train={src_key} → test={tgt_key}")
+            print(f"  [dist_shift] {label} | train={src_key} -> test={tgt_key}")
 
         X_tr, X_val, _, y_tr, y_val, _, _ = datasets[src_key]
         _,    _,    X_te_tgt, _, _, y_te_tgt, _ = datasets[tgt_key]
@@ -151,9 +151,9 @@ def run_distribution_shift(
         }
 
         if verbose:
-            print(f"    ECE: in-dist={metrics_indist['ece']:.4f} → transfer={metrics_transfer['ece']:.4f} "
+            print(f"    ECE: in-dist={metrics_indist['ece']:.4f} -> transfer={metrics_transfer['ece']:.4f} "
                   f"(ratio={deg_ece:.2f})")
-            print(f"    PR-AUC: in-dist={metrics_indist['pr_auc']:.4f} → "
+            print(f"    PR-AUC: in-dist={metrics_indist['pr_auc']:.4f} -> "
                   f"transfer={metrics_transfer['pr_auc']:.4f}")
             print(f"    Robust: {'YES' if results[label]['robust_transfer'] else 'NO'}")
 

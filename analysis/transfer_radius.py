@@ -258,7 +258,7 @@ def run_transfer_radius(
                 )
                 if result is None:
                     if verbose:
-                        print(f'  [SKIP] dataset missing for {src_key}→{tgt_key}')
+                        print(f'  [SKIP] dataset missing for {src_key}->{tgt_key}')
                     continue
 
                 direction = 'up' if tgt_rate > src_rate else 'down'
@@ -282,7 +282,7 @@ def run_transfer_radius(
 
                 if verbose:
                     status = 'ROBUST' if result['is_robust'] else 'FAIL'
-                    print(f'  {src_key}→{tgt_key}  Δ={delta:.3f} [{direction}]  '
+                    print(f'  {src_key}->{tgt_key}  Delta={delta:.3f} [{direction}]  '
                           f'AUROC_drop={result["auroc_drop"]:+.4f}  '
                           f'ECE_ratio={result["ece_ratio"]:.3f}  [{status}]')
 
@@ -389,12 +389,12 @@ def main():
     pair_df.to_csv(pair_path,    index=False, float_format='%.6f')
     summary_df.to_csv(summary_path, index=False, float_format='%.6f')
 
-    print(f'\n[transfer_radius] Saved {len(pair_df)} pair rows → {pair_path}')
-    print(f'[transfer_radius] Saved {len(summary_df)} summary rows → {summary_path}')
+    print(f'\n[transfer_radius] Saved {len(pair_df)} pair rows -> {pair_path}')
+    print(f'[transfer_radius] Saved {len(summary_df)} summary rows -> {summary_path}')
 
     # Print a concise "what the paper should say" conclusion
     if not summary_df.empty:
-        print('\n  ── Defensible claim (replace "~3% transfer radius") ──')
+        print('\n  -- Defensible claim (replace "~3% transfer radius") --')
         for _, r in summary_df.sort_values(['stratum', 'direction']).iterrows():
             rad = f"{r['transfer_radius']*100:.1f}%" if np.isfinite(r['transfer_radius']) else 'N/A'
             ff  = (f"{r['first_failing_delta']*100:.1f}%"

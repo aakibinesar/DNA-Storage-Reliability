@@ -164,12 +164,12 @@ def main():
 
     sweep_path = os.path.join(args.out, f'{args.key}_threshold_sensitivity.csv')
     sweep_df.to_csv(sweep_path, index=False, float_format='%.6f')
-    print(f"\n[threshold_sensitivity] Saved sweep → {sweep_path}")
+    print(f"\n[threshold_sensitivity] Saved sweep -> {sweep_path}")
     print(sweep_df.to_string(index=False, float_format=lambda x: f'{x:.4f}'))
 
     nt_path = os.path.join(args.out, f'{args.key}_near_threshold_stats.csv')
     pd.DataFrame([nt]).to_csv(nt_path, index=False, float_format='%.6f')
-    print(f"\n[threshold_sensitivity] Saved near-threshold stats → {nt_path}")
+    print(f"\n[threshold_sensitivity] Saved near-threshold stats -> {nt_path}")
 
 
 if __name__ == '__main__':

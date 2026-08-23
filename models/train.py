@@ -341,7 +341,7 @@ def main():
     tune_idx, cal_idx = perm[:mid], perm[mid:]
     X_tune, y_tune = X_val[tune_idx], y_val[tune_idx]
     X_cal,  y_cal  = X_val[cal_idx],  y_val[cal_idx]
-    print(f"  val split → tune={len(y_tune)}, cal={len(y_cal)}")
+    print(f"  val split -> tune={len(y_tune)}, cal={len(y_cal)}")
 
     models = train_all_models(X_tr, y_tr, X_tune, y_tune, X_cal, y_cal,
                                cfg, seed=cfg['random_seed'], verbose=True)

@@ -138,9 +138,9 @@ def run_calibration_regimes(
                         if n >= 5 else "—")
             print(f"  {r['regime']:<15} {n:>6} {frac:>6} {prev:>11} "
                   f"{ece_s:>7} {ece_ci:>16} {brier_s:>7} {brier_ci:>16}")
-        print(f"\n  Δ_ECE   (informative − aggregate): "
+        print(f"\n  Delta_ECE   (informative - aggregate): "
               f"{delta_df['delta_ece'].values[0]:+.4f}")
-        print(f"  Δ_Brier (informative − aggregate): "
+        print(f"  Delta_Brier (informative - aggregate): "
               f"{delta_df['delta_brier'].values[0]:+.4f}")
 
     return regime_df, delta_df
@@ -210,11 +210,11 @@ def main():
 
     regime_path = os.path.join(args.out, f'{args.key}_calibration_regimes.csv')
     regime_df.to_csv(regime_path, index=False, float_format='%.6f')
-    print(f"\n[calibration_regimes] Saved regime table → {regime_path}")
+    print(f"\n[calibration_regimes] Saved regime table -> {regime_path}")
 
     delta_path = os.path.join(args.out, f'{args.key}_calibration_delta.csv')
     delta_df.to_csv(delta_path, index=False, float_format='%.6f')
-    print(f"[calibration_regimes] Saved delta summary → {delta_path}")
+    print(f"[calibration_regimes] Saved delta summary -> {delta_path}")
 
 
 if __name__ == '__main__':
