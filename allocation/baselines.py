@@ -17,7 +17,7 @@ enforced identically for all conditions.
 
 Baselines
 ---------
-  gc_dev    — |gc_content − 0.5|; extreme GC content correlates with higher
+  gc_dev    — |gc_content - 0.5|; extreme GC content correlates with higher
               failure probability through the pcr_bias reliability-skew mechanism.
   hp        — max homopolymer run length; long HP runs correlate with higher
               failure probability through the hp_stutter mechanism.
@@ -34,7 +34,7 @@ from typing import Dict, List
 import numpy as np
 
 
-# ── Sequence-level feature extractors ────────────────────────────────────────
+# -- Sequence-level feature extractors ----------------------------------------
 
 def _gc_content(seq: str) -> float:
     return sum(1 for c in seq if c in 'GC') / len(seq) if seq else 0.5
@@ -52,12 +52,12 @@ def _max_hp_run(seq: str) -> int:
     return max_run
 
 
-# ── Risk score vectors ────────────────────────────────────────────────────────
+# -- Risk score vectors --------------------------------------------------------
 
 def gc_deviation_scores(sequences: List[str]) -> np.ndarray:
-    """Risk score = |gc_content − 0.5|; range [0, 0.5].
+    """Risk score = |gc_content - 0.5|; range [0, 0.5].
 
-    Higher → sequence has extreme GC content → more parity allocated.
+    Higher -> sequence has extreme GC content -> more parity allocated.
     The AllocationMechanism only uses rankings, not absolute values.
     """
     return np.array([abs(_gc_content(s) - 0.5) for s in sequences])
@@ -66,7 +66,7 @@ def gc_deviation_scores(sequences: List[str]) -> np.ndarray:
 def hp_scores(sequences: List[str]) -> np.ndarray:
     """Risk score = max homopolymer run length; range [1, seq_len].
 
-    Higher → sequence has longer HP runs → more parity allocated.
+    Higher -> sequence has longer HP runs -> more parity allocated.
     """
     return np.array([float(_max_hp_run(s)) for s in sequences])
 
@@ -93,15 +93,16 @@ def random_scores(n: int, seed: int = 8000) -> np.ndarray:
     return np.random.default_rng(seed).uniform(0.0, 1.0, size=n)
 
 
-# ── Combined allocation helper ────────────────────────────────────────────────
+# -- Combined allocation helper ------------------------------------------------
 
 def get_baseline_allocations(
-    sequences:    List[str],
-    l_rs_default: int,
-    delta:        int,
-    l_rs_min:     int,
-    l_rs_max:     int,
-    random_seed:  int = 8000,
+    sequences:     List[str],
+    l_rs_default:  int,
+    delta:         int,
+    l_rs_min:      int,
+    l_rs_max:      int,
+    random_seed:   int = 8000,
+    tier_fraction: float = None,
 ) -> Dict[str, np.ndarray]:
     """Compute l_rs allocation vectors for all four rule-based baselines.
 
@@ -110,8 +111,13 @@ def get_baseline_allocations(
 
     Parameters
     ----------
-    random_seed : seed for the random baseline; keep well away from channel
-                  and model seeds (default 8000 is outside all used ranges)
+    random_seed   : seed for the random baseline; keep well away from channel
+                     and model seeds (default 8000 is outside all used ranges)
+    tier_fraction  : R4 fix -- fraction of sequences to promote/demote. Pass the
+                     oracle's n_star / N (from oracle_allocation_greedy_swap) so
+                     every baseline is compared against the model and oracle using
+                     the same budget size, differing only in ranking quality.
+                     None falls back to AllocationMechanism's old max-tier default.
 
     Returns
     -------
@@ -122,8 +128,8 @@ def get_baseline_allocations(
     alloc = AllocationMechanism(l_rs_default, delta, l_rs_min, l_rs_max)
     N = len(sequences)
     return {
-        'gc_dev'   : alloc.allocate(gc_deviation_scores(sequences)),
-        'hp'       : alloc.allocate(hp_scores(sequences)),
-        'composite': alloc.allocate(composite_scores(sequences)),
-        'random'   : alloc.allocate(random_scores(N, seed=random_seed)),
+        'gc_dev'   : alloc.allocate(gc_deviation_scores(sequences), tier_fraction),
+        'hp'       : alloc.allocate(hp_scores(sequences), tier_fraction),
+        'composite': alloc.allocate(composite_scores(sequences), tier_fraction),
+        'random'   : alloc.allocate(random_scores(N, seed=random_seed), tier_fraction),
     }

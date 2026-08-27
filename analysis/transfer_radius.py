@@ -8,7 +8,7 @@ Motivation
 The vague "~3% transfer radius" claim in the paper is derived from only 4
 upward transfer conditions (§ distribution_shift.py).  A single-number radius
 is not defensible because:
-  • It ignores downward transfers (high → low sub_rate).
+  • It ignores downward transfers (high -> low sub_rate).
   • It was measured only from sub09 and sub12 as source rates.
   • It does not vary by coverage depth or encoding scheme.
   • It uses aggregate AUROC, which R11 shows is inflated by degenerate regimes.
@@ -22,7 +22,7 @@ covers ALL ordered (src, tgt) pairs within a configurable max_delta, using:
 
 Robustness criterion (both must hold):
   ECE degradation ratio  = ECE_transfer / ECE_in-dist  < ECE_THRESHOLD (2.0)
-  AUROC drop             = AUROC_in-dist − AUROC_transfer ≤ AUROC_THRESHOLD (0.05)
+  AUROC drop             = AUROC_in-dist - AUROC_transfer <= AUROC_THRESHOLD (0.05)
 
 Outputs
 -------
@@ -56,7 +56,7 @@ ECE_THRESHOLD  = 2.0   # ECE must not more than double
 AUROC_THRESHOLD = 0.05  # AUROC may not fall more than 5 pp
 
 
-# ── Model and dataset helpers ─────────────────────────────────────────────────
+# -- Model and dataset helpers -------------------------------------------------
 
 def _load_model_for_key(models_dir: str, key: str):
     """Return calibrated XGBoost for key, or None if not found."""
@@ -78,7 +78,7 @@ def _informative_metrics(failure_freq: np.ndarray, y_prob: np.ndarray,
     return info
 
 
-# ── Core transfer evaluation ─────────────────────────────────────────────────
+# -- Core transfer evaluation -------------------------------------------------
 
 def evaluate_transfer_pair(
     src_key: str,
@@ -96,7 +96,7 @@ def evaluate_transfer_pair(
     src_key : key whose model is used (train domain)
     tgt_key : key whose test set is used (deployment domain)
     model   : calibrated model loaded from src_key
-    datasets: dict of key → (X_tr, X_val, X_te, y_tr, y_val, y_te, feat_names)
+    datasets: dict of key -> (X_tr, X_val, X_te, y_tr, y_val, y_te, feat_names)
     lo, hi  : regime thresholds from config
 
     Returns
@@ -149,12 +149,12 @@ def evaluate_transfer_pair(
     }
 
 
-# ── Radius computation ────────────────────────────────────────────────────────
+# -- Radius computation --------------------------------------------------------
 
 def compute_radius_from_pairs(pair_rows: List[dict]) -> dict:
     """Compute formal transfer radius for one (stratum, direction) slice.
 
-    Transfer radius = max δ such that every tested pair with |Δ| ≤ δ passes
+    Transfer radius = max delta such that every tested pair with |Delta| <= delta passes
     both robustness thresholds.  Pairs are grouped by delta and checked in
     ascending order; the radius stops at the first delta where any pair fails.
 
@@ -196,7 +196,7 @@ def compute_radius_from_pairs(pair_rows: List[dict]) -> dict:
     }
 
 
-# ── Full sweep ────────────────────────────────────────────────────────────────
+# -- Full sweep ----------------------------------------------------------------
 
 def run_transfer_radius(
     sub_rates : List[float],
@@ -288,7 +288,7 @@ def run_transfer_radius(
 
     pair_df = pd.DataFrame(all_pairs)
 
-    # ── Radius summary: one row per (stratum, direction) ─────────────────────
+    # -- Radius summary: one row per (stratum, direction) ---------------------
     summary_rows: List[dict] = []
     if not pair_df.empty:
         for (stratum, direction), grp in pair_df.groupby(['stratum', 'direction']):
@@ -320,12 +320,12 @@ def _print_radius_table(summary_df: pd.DataFrame):
     print(f"  {'-' * 55}")
     for _, r in summary_df.sort_values(['stratum', 'direction']).iterrows():
         rad = f"{r['transfer_radius']:.3f}" if np.isfinite(r['transfer_radius']) else '—'
-        ff  = f"{r['first_failing_delta']:.3f}" if np.isfinite(r['first_failing_delta']) else '∞'
+        ff  = f"{r['first_failing_delta']:.3f}" if np.isfinite(r['first_failing_delta']) else 'infinity'
         print(f"  {r['stratum']:<15} {r['direction']:<6} {rad:>8} {ff:>10} "
               f"  {int(r['n_robust'])}/{int(r['n_tested'])}")
 
 
-# ── CLI ───────────────────────────────────────────────────────────────────────
+# -- CLI -----------------------------------------------------------------------
 
 def main():
     parser = argparse.ArgumentParser(
@@ -335,7 +335,7 @@ def main():
     parser.add_argument('--models-dir', default='models/saved/')
     parser.add_argument('--out',        default='results/transfer_radius/')
     parser.add_argument('--max-delta',  type=float, default=0.12,
-                        help='Only test pairs with |src_rate − tgt_rate| ≤ this value.')
+                        help='Only test pairs with |src_rate - tgt_rate| <= this value.')
     parser.add_argument('--quiet', action='store_true')
     args = parser.parse_args()
 

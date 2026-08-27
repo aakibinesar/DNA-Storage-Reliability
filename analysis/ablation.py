@@ -31,7 +31,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'models'))
 
 
-# ── Feature group definitions ────────────────────────────────────────────────
+# -- Feature group definitions ------------------------------------------------
 
 FEATURE_GROUPS = {
     'kmer': [
@@ -194,7 +194,7 @@ def save_ablation_results(results: dict, out_path: str):
     return df
 
 
-# ── CLI entry point ──────────────────────────────────────────────────────────
+# -- CLI entry point ----------------------------------------------------------
 
 def main():
     parser = argparse.ArgumentParser(description='Feature ablation analysis.')

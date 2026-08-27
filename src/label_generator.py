@@ -7,9 +7,9 @@ often RS correction fails.
 
 Label definition (from the implementation plan):
     For each sequence, run K independent channel simulations.
-    In each run: apply channel → consensus vote → count byte errors → check
+    In each run: apply channel -> consensus vote -> count byte errors -> check
     failure condition (byte_errors > floor(L_RS / 2)).
-    Label = fraction of K runs that result in failure ∈ [0, 1].
+    Label = fraction of K runs that result in failure in [0, 1].
 
 These soft probabilistic labels serve as regression targets for model training
 and also generate binary labels (threshold at 0.5) for classification metrics.
@@ -18,8 +18,8 @@ R8 note — label noise at M=30
 ------------------------------
 With M=30 independent runs, a sequence whose true failure probability is p has
 empirical failure_freq drawn from Binomial(30, p)/30.  At p=0.5 the standard
-error is 0.5/√30 ≈ 0.091, so the 95% Wilson CI spans ±0.18 around the
-threshold.  Sequences with true p ∈ (0.32, 0.68) may be mislabelled by the
+error is 0.5/sqrt30 ~= 0.091, so the 95% Wilson CI spans ±0.18 around the
+threshold.  Sequences with true p in (0.32, 0.68) may be mislabelled by the
 binary 0.5 rule.
 
 Mitigations implemented here:
@@ -82,7 +82,7 @@ def compute_failure_labels(
 
     Returns
     -------
-    failure_freq : ndarray shape (N,) — empirical failure probability ∈ [0, 1]
+    failure_freq : ndarray shape (N,) — empirical failure probability in [0, 1]
     byte_errors_mean : ndarray shape (N,) — mean byte errors across runs
     """
     _import_modules()
@@ -124,8 +124,8 @@ def sanity_check(
     """Run the go/no-go sanity checks from the implementation plan (Week 4).
 
     Expected results:
-      - K=30, 1% sub  → consensus byte error rate < 0.1%
-      - K=10, 12% sub → failure rate ≈ 3–5% (some failures expected)
+      - K=30, 1% sub  -> consensus byte error rate < 0.1%
+      - K=10, 12% sub -> failure rate ~= 3–5% (some failures expected)
 
     Returns a dict with 'pass', 'mean_byte_errors', 'failure_rate'.
     """
@@ -160,14 +160,14 @@ def label_confidence_intervals(
     """Wilson score confidence intervals for per-sequence failure_freq estimates.
 
     Each failure_freq is an empirical proportion k/n_runs from Bernoulli trials.
-    At M=30 and p≈0.5 the 95% CI half-width is ≈ ±0.18, so sequences with
-    true p ∈ (0.32, 0.68) have genuinely uncertain binary labels.
+    At M=30 and p~=0.5 the 95% CI half-width is ~= ±0.18, so sequences with
+    true p in (0.32, 0.68) have genuinely uncertain binary labels.
 
     Parameters
     ----------
-    failure_freq : ndarray (N,) — empirical failure fraction ∈ [0, 1]
+    failure_freq : ndarray (N,) — empirical failure fraction in [0, 1]
     n_runs       : M — number of independent MC trials
-    alpha        : significance level (0.05 → 95% CI)
+    alpha        : significance level (0.05 -> 95% CI)
 
     Returns
     -------
@@ -195,7 +195,7 @@ def near_threshold_stats(
 ) -> dict:
     """Report what fraction of sequences have genuinely uncertain binary labels.
 
-    A sequence is "near-threshold" when its (1−alpha) Wilson CI spans the
+    A sequence is "near-threshold" when its (1-alpha) Wilson CI spans the
     threshold, meaning the M Monte Carlo runs do not provide enough evidence to
     confidently assign a binary label.
 
@@ -204,7 +204,7 @@ def near_threshold_stats(
     failure_freq : ndarray (N,) — empirical failure fraction
     n_runs       : M — Monte Carlo runs used to produce failure_freq
     threshold    : binary classification threshold (typically 0.5)
-    alpha        : significance level for the CI (0.05 → 95%)
+    alpha        : significance level for the CI (0.05 -> 95%)
 
     Returns
     -------
@@ -289,7 +289,7 @@ def save_labels(
     return df
 
 
-# ── CLI entry point ──────────────────────────────────────────────────────────
+# -- CLI entry point ----------------------------------------------------------
 
 def main():
     parser = argparse.ArgumentParser(

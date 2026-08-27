@@ -3,18 +3,18 @@ sequence_generator.py
 =====================
 Generates DNA sequences from random binary payloads using two encoding schemes:
 
-  1. ``simple``      — direct 2-bit mapping (00→A, 01→C, 10→G, 11→T).
+  1. ``simple``      — direct 2-bit mapping (00->A, 01->C, 10->G, 11->T).
                        Unconstrained: high feature variance, representative of naive
                        DNA-storage pipelines.
 
   2. ``constrained`` — GC-balanced, homopolymer-limited encoding that approximates
-                       the class of constrained codes (e.g. R∞-P8 from Seo et al.).
+                       the class of constrained codes (e.g. Rinfinity-P8 from Seo et al.).
                        Lower feature variance; tests allocation under realistic
                        sequence design.
 
 Both schemes operate at 2 bits/base (maximum information density).  The constrained
-encoder uses a local re-mapping table to enforce GC ∈ [gc_min, gc_max] and
-homopolymer run ≤ max_homopolymer.
+encoder uses a local re-mapping table to enforce GC in [gc_min, gc_max] and
+homopolymer run <= max_homopolymer.
 
 Usage (CLI):
     python sequence_generator.py --config configs/experiment_config.yaml \
@@ -31,7 +31,7 @@ import numpy as np
 import yaml
 
 
-# ── 2-bit encoding alphabet ──────────────────────────────────────────────────
+# -- 2-bit encoding alphabet --------------------------------------------------
 SIMPLE_TABLE = {0b00: 'A', 0b01: 'C', 0b10: 'G', 0b11: 'T'}
 SIMPLE_INV   = {v: k for k, v in SIMPLE_TABLE.items()}
 
@@ -39,12 +39,12 @@ COMPLEMENT = {'A': 'T', 'T': 'A', 'G': 'C', 'C': 'G', 'N': 'N'}
 
 # Constraint re-mapping: for each (current_base, prev_base, prev_prev_base, gc_excess)
 # context, provide an ordered list of candidate replacements that would be preferred.
-# Simplified: AT ↔ GC swaps to balance GC; duplicate-base swaps to break homopolymers.
+# Simplified: AT <-> GC swaps to balance GC; duplicate-base swaps to break homopolymers.
 _AT_BASES = {'A', 'T'}
 _GC_BASES = {'G', 'C'}
 
 
-# ── Public API ───────────────────────────────────────────────────────────────
+# -- Public API ---------------------------------------------------------------
 
 def generate_sequences(
     n: int,
@@ -98,7 +98,7 @@ def decode_sequence(dna: str, encoding: str = 'simple') -> bytes:
     bits = []
     for base in dna:
         if base not in SIMPLE_INV:
-            bits.extend([0, 0])   # unknown base → zero bits (conservative)
+            bits.extend([0, 0])   # unknown base -> zero bits (conservative)
         else:
             code = SIMPLE_INV[base]
             bits.append((code >> 1) & 1)
@@ -118,7 +118,7 @@ def sequence_checksum(dna: str) -> str:
     return hashlib.md5(dna.encode()).hexdigest()[:8]
 
 
-# ── Internal encoders ────────────────────────────────────────────────────────
+# -- Internal encoders --------------------------------------------------------
 
 def _simple_encode(payload: bytes, seq_len: int) -> str:
     """Direct 2-bit-per-base encoding.  No constraints enforced."""
@@ -238,7 +238,7 @@ def _bytes_to_bits(data: bytes) -> List[int]:
     return bits
 
 
-# ── Feature statistics helpers (used by diagnostics) ─────────────────────────
+# -- Feature statistics helpers (used by diagnostics) -------------------------
 
 def gc_content(dna: str) -> float:
     if not dna:
@@ -259,7 +259,7 @@ def max_homopolymer_run(dna: str) -> int:
     return max_run
 
 
-# ── CLI entry point ──────────────────────────────────────────────────────────
+# -- CLI entry point ----------------------------------------------------------
 
 def main():
     parser = argparse.ArgumentParser(description='Generate DNA sequences for the benchmark.')

@@ -15,12 +15,12 @@ reduce effective sequencing depth, making failure probability learnable:
 
   1. GC-content amplification bias (Lin et al. ISCA 2022; DeSP).
      Extreme-GC sequences are under-amplified across all PCR cycles:
-         gc_factor = (1 − pcr_bias × |gc−0.5| × 4)^pcr_cycles
+         gc_factor = (1 - pcr_bias × |gc-0.5| × 4)^pcr_cycles
 
   2. Homopolymer PCR-stutter coverage loss.
      Long HP runs generate length-variant artifacts that are discarded
      before consensus, reducing effective K:
-         hp_factor = 1 / (1 + hp_stutter_factor × max(0, max_hp_run − 2))
+         hp_factor = 1 / (1 + hp_stutter_factor × max(0, max_hp_run - 2))
 
 Combined:
     eff_K = max(1, round(K × gc_factor × hp_factor))
@@ -53,11 +53,11 @@ _BASE_IDX  : dict[str, int] = {b: i for i, b in enumerate(_BASES)}
 _INT_TO_BASE = np.array(['A', 'C', 'G', 'T'], dtype='U1')
 
 _DEFAULT_TSUB = np.array([
-    # →A      →C      →G      →T
-    [0.0000, 0.0050, 0.0030, 0.0020],   # A→
-    [0.0010, 0.0000, 0.0070, 0.0020],   # C→
-    [0.0000, 0.0020, 0.0000, 0.0080],   # G→
-    [0.0040, 0.0010, 0.0050, 0.0000],   # T→
+    # ->A      ->C      ->G      ->T
+    [0.0000, 0.0050, 0.0030, 0.0020],   # A->
+    [0.0010, 0.0000, 0.0070, 0.0020],   # C->
+    [0.0000, 0.0020, 0.0000, 0.0080],   # G->
+    [0.0040, 0.0010, 0.0050, 0.0000],   # T->
 ], dtype=np.float64)
 
 _PCR_POOL_CAP : int   = 2000
@@ -65,7 +65,7 @@ _HP_STUTTER   : float = 0.08   # HP coverage-loss factor per extra HP base beyon
 
 
 # ---------------------------------------------------------------------------
-# Utility: string ↔ integer array
+# Utility: string <-> integer array
 # ---------------------------------------------------------------------------
 
 _LOOKUP = np.zeros(256, dtype=np.uint8)
@@ -74,12 +74,12 @@ for _b, _i in _BASE_IDX.items():
 
 
 def _str_to_int(seq: str) -> np.ndarray:
-    """DNA string → uint8 array  (A=0, C=1, G=2, T=3)."""
+    """DNA string -> uint8 array  (A=0, C=1, G=2, T=3)."""
     return _LOOKUP[np.frombuffer(seq.encode('ascii'), dtype=np.uint8)].copy()
 
 
 def _int_to_str(arr: np.ndarray) -> str:
-    """uint8 array → DNA string."""
+    """uint8 array -> DNA string."""
     return ''.join(_INT_TO_BASE[np.clip(arr, 0, 3)])
 
 
@@ -159,11 +159,11 @@ class DNAStorageChannel:
     # ------------------------------------------------------------------
 
     def simulate(self, original: str, coverage: int = 30) -> List[str]:
-        """Run the full pipeline and return eff_K ≤ coverage noisy reads.
+        """Run the full pipeline and return eff_K <= coverage noisy reads.
 
         eff_K is reduced for sequences with extreme GC content or long
         homopolymer runs (reliability-skew model — see module docstring).
-        eff_K is always ≥ 1.
+        eff_K is always >= 1.
 
         Parameters
         ----------
@@ -217,18 +217,18 @@ class DNAStorageChannel:
         """Compute joint GC- and HP-dependent effective sequencing depth.
 
         GC component (library amplification skew):
-            gc_factor = max(0.05, 1 − pcr_bias × |gc−0.5| × 4) ^ pcr_cycles
+            gc_factor = max(0.05, 1 - pcr_bias × |gc-0.5| × 4) ^ pcr_cycles
 
         HP component (PCR stutter artifact filtering):
-            hp_factor = 1 / (1 + HP_STUTTER × max(0, max_hp_run − 2))
+            hp_factor = 1 / (1 + HP_STUTTER × max(0, max_hp_run - 2))
 
         Combined:
             eff_K = max(1, round(K × gc_factor × hp_factor))
 
         At pcr_bias=0.05, pcr_cycles=10, HP_STUTTER=0.08 (K=5 examples):
-            GC=0.50, HP=1 → eff_K = 5  (no reduction)
-            GC=0.40, HP=5 → eff_K = 3  (moderate reduction)
-            GC=0.30, HP=8 → eff_K = 2  (large reduction)
+            GC=0.50, HP=1 -> eff_K = 5  (no reduction)
+            GC=0.40, HP=5 -> eff_K = 3  (moderate reduction)
+            GC=0.30, HP=8 -> eff_K = 2  (large reduction)
         """
         # GC amplification factor
         gc_dev     = abs(gc_frac - 0.5)
@@ -317,7 +317,7 @@ class DNAStorageChannel:
     def _sparse_indel_pass(
         self, pool: np.ndarray, indel_rate: float, target_len: int
     ) -> np.ndarray:
-        """Apply indels only to rows that have ≥1 indel event; trim/pad to L."""
+        """Apply indels only to rows that have >=1 indel event; trim/pad to L."""
         n, L     = pool.shape
         p_any    = 1.0 - np.exp(-L * indel_rate)
         affected = np.where(self._rng.random(n) < p_any)[0]
@@ -342,8 +342,8 @@ class DNAStorageChannel:
 def _build_tsub_cumulative(rate: float) -> np.ndarray:
     """Build (4, 4) cumulative transition matrix scaled to *rate*.
 
-    tsub_cumul[i, j] = P(base i → any base in {0…j}).
-    Diagonal = P(no substitution) = 1 − rate.
+    tsub_cumul[i, j] = P(base i -> any base in {0…j}).
+    Diagonal = P(no substitution) = 1 - rate.
 
     Inverse-CDF decode: new_base = (r > tsub_cumul[old_base]).sum()
     """
@@ -452,8 +452,8 @@ def build_ablated_channel(
     ----------
     ablation : one of 'full', 'no_gc_skew', 'no_hp_stutter', 'flat_skew'
         'full'          — identical to build_channel_from_config (reference)
-        'no_gc_skew'    — pcr_bias=0  → gc_factor=1 for all sequences
-        'no_hp_stutter' — hp_stutter=0 → hp_factor=1 for all sequences
+        'no_gc_skew'    — pcr_bias=0  -> gc_factor=1 for all sequences
+        'no_hp_stutter' — hp_stutter=0 -> hp_factor=1 for all sequences
         'flat_skew'     — both mechanisms off; failures driven by sub/indel rates only
 
     Used in analysis/channel_ablation.py to test whether model predictions

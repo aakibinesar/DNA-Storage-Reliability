@@ -31,7 +31,7 @@ def main():
     parser.add_argument('--key', default=None,
                          help='Dataset config key. Defaults to the highest '
                               'substitution rate + primary coverage + constrained '
-                              'encoding (the R∞-P8 12%% condition from the plan).')
+                              'encoding (the Rinfinity-P8 12%% condition from the plan).')
     parser.add_argument('--models-dir', default='models/saved/')
     args = parser.parse_args()
 

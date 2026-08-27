@@ -23,7 +23,7 @@ N_BOOTSTRAP independent bootstrap samples of the test set, computing:
   3. Top-K consistency: fraction of bootstrap runs in which each of the
      reference top-K features appears among the bootstrap top-K.
 
-A feature is labelled STABLE if its rank_std ≤ STABLE_RANK_STD (default 3.0),
+A feature is labelled STABLE if its rank_std <= STABLE_RANK_STD (default 3.0),
 meaning its rank moves less than ±3 positions across bootstraps.
 
 The analysis uses the *informative-regime* test sequences only (R11 fix):
@@ -65,7 +65,7 @@ TOP_K          = 10      # features to track for "top-K consistency"
 STABLE_RANK_STD = 3.0   # rank std threshold for "stable" label
 
 
-# ── SHAP helpers ──────────────────────────────────────────────────────────────
+# -- SHAP helpers --------------------------------------------------------------
 
 def _shap_importances(model, X: np.ndarray) -> np.ndarray:
     """Mean |SHAP| per feature.  Unwraps CalibratedModel if necessary."""
@@ -90,14 +90,14 @@ def _ranks(importances: np.ndarray) -> np.ndarray:
     return ranks
 
 
-# ── Regime filter ─────────────────────────────────────────────────────────────
+# -- Regime filter -------------------------------------------------------------
 
 def _informative_mask(failure_freq: np.ndarray, lo: float, hi: float) -> np.ndarray:
     """Boolean mask: True for sequences in the informative regime."""
     return (failure_freq >= lo) & (failure_freq <= hi)
 
 
-# ── Core analysis ─────────────────────────────────────────────────────────────
+# -- Core analysis -------------------------------------------------------------
 
 def run_shap_stability(
     model,
@@ -244,7 +244,7 @@ def run_shap_stability(
     return feat_df, tau_df
 
 
-# ── CLI ───────────────────────────────────────────────────────────────────────
+# -- CLI -----------------------------------------------------------------------
 
 def main():
     parser = argparse.ArgumentParser(

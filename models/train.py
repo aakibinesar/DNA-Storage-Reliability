@@ -106,7 +106,7 @@ def train_all_models(
 
     results = {}
 
-    # ── 1. XGBoost — regressor on continuous failure_freq (R1 fix) ───────────
+    # -- 1. XGBoost — regressor on continuous failure_freq (R1 fix) -----------
     if verbose:
         print("  Training XGBoost ...")
     xgb_model = _train_xgboost(
@@ -119,7 +119,7 @@ def train_all_models(
     if verbose:
         print(f"    XGBoost fitted")
 
-    # ── 2. Random Forest — regressor on continuous failure_freq (R1 fix) ─────
+    # -- 2. Random Forest — regressor on continuous failure_freq (R1 fix) -----
     if verbose:
         print("  Training Random Forest ...")
     rf_model = _train_random_forest(
@@ -132,7 +132,7 @@ def train_all_models(
     if verbose:
         print(f"    Random Forest fitted")
 
-    # ── 3. Logistic Regression — binary majority-fail discriminator ───────────
+    # -- 3. Logistic Regression — binary majority-fail discriminator -----------
     # LR uses binarised labels. Its output is P(majority_fail), not the expected
     # per-run failure probability. Treated as a risk-ranking baseline.
     if verbose:
@@ -152,7 +152,7 @@ def train_all_models(
     return results
 
 
-# ── Model-specific trainers ───────────────────────────────────────────────────
+# -- Model-specific trainers ---------------------------------------------------
 
 def _train_xgboost(X_tr, y_tr, X_val, y_val, xgb_cfg, seed, weights=None):
     """Grid search over XGBoost hyperparameters, select on val Brier score.
@@ -263,7 +263,7 @@ def _train_logistic_regression(X_tr, y_tr, X_val, y_val, lr_cfg, seed, weights=N
     return best_model
 
 
-# ── Persistence helpers ──────────────────────────────────────────────────────
+# -- Persistence helpers ------------------------------------------------------
 
 def save_models(models: dict, out_dir: str, key: str):
     """Pickle all models to the output directory."""
@@ -285,7 +285,7 @@ def load_models(out_dir: str, key: str) -> dict:
     return models
 
 
-# ── SHAP analysis ─────────────────────────────────────────────────────────────
+# -- SHAP analysis -------------------------------------------------------------
 
 def compute_shap_values(
     model,
@@ -315,7 +315,7 @@ def compute_shap_values(
     return shap_vals, importances
 
 
-# ── CLI entry point ──────────────────────────────────────────────────────────
+# -- CLI entry point ----------------------------------------------------------
 
 def main():
     parser = argparse.ArgumentParser(description='Train all ML models for one dataset config.')

@@ -84,7 +84,7 @@ STAGE_ORDER = ['datasets', 'train', 'gate_check', 'threshold_sensitivity',
 _status_lock = threading.Lock()
 
 
-# ── status persistence ───────────────────────────────────────────────────────
+# -- status persistence -------------------------------------------------------
 
 def _now():
     return datetime.now(timezone.utc).isoformat(timespec='seconds')
@@ -114,7 +114,7 @@ def set_item_status(name, **fields):
     return entry
 
 
-# ── subprocess execution with live logging + heartbeat ─────────────────────
+# -- subprocess execution with live logging + heartbeat ---------------------
 
 def run_cmd(name, cmd, log_path, dry_run=False):
     """Run `cmd` (list of args), streaming output to log_path, updating
@@ -163,7 +163,7 @@ def run_cmd(name, cmd, log_path, dry_run=False):
     return rc
 
 
-# ── checkpoint predicates (skip work that's already done on disk) ──────────
+# -- checkpoint predicates (skip work that's already done on disk) ----------
 
 def all_dataset_files_exist(cfg, keys):
     ddir = os.path.join(ROOT, cfg['paths']['datasets_dir'])
@@ -210,7 +210,7 @@ def figures_exist(out_dir):
     return os.path.isdir(p) and len(os.listdir(p)) > 0
 
 
-# ── config helpers ──────────────────────────────────────────────────────────
+# -- config helpers ----------------------------------------------------------
 
 def get_all_keys(cfg):
     sub_rates = cfg['channel']['substitution_rates']
@@ -222,7 +222,7 @@ def get_all_keys(cfg):
     ]
 
 
-# ── stage implementations ───────────────────────────────────────────────────
+# -- stage implementations ---------------------------------------------------
 
 def stage_datasets(cfg, args):
     keys = get_all_keys(cfg)
@@ -530,7 +530,7 @@ STAGE_FUNCS = {
 }
 
 
-# ── status report ────────────────────────────────────────────────────────────
+# -- status report ------------------------------------------------------------
 
 def print_status_report():
     status = load_status()
@@ -566,7 +566,7 @@ def print_status_report():
           f"{len(states)} total tracked items.")
 
 
-# ── main ─────────────────────────────────────────────────────────────────────
+# -- main ---------------------------------------------------------------------
 
 def main():
     parser = argparse.ArgumentParser(description='Run the full DNA-storage pipeline.')

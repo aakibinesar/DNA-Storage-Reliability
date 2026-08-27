@@ -63,7 +63,7 @@ import yaml
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'models'))
 
-# ── Binning parameters ────────────────────────────────────────────────────────
+# -- Binning parameters --------------------------------------------------------
 
 # GC bins — chosen so the constrained-encoding range [0.40, 0.60] occupies
 # exactly one bin, making the confound comparison visually clean.
@@ -78,7 +78,7 @@ HP_EDGES  = [0, 3, 4, 99]
 HP_LABELS = ['HP<=2', 'HP=3', 'HP>=4']
 
 
-# ── Feature extraction helpers ────────────────────────────────────────────────
+# -- Feature extraction helpers ------------------------------------------------
 
 def _feature_col(X: np.ndarray, feat_names: List[str], name: str) -> np.ndarray:
     """Return a single feature column by exact name."""
@@ -102,7 +102,7 @@ def _in_constrained_support(gc: np.ndarray, hp: np.ndarray,
     return (gc >= gc_lo) & (gc <= gc_hi) & (hp <= hp_max)
 
 
-# ── Core analysis ─────────────────────────────────────────────────────────────
+# -- Core analysis -------------------------------------------------------------
 
 def run_encoding_confound(
     src_sub_rate : float,
@@ -160,7 +160,7 @@ def run_encoding_confound(
               f"the constrained-encoding support (GC not in "
               f"[{gc_lo:.2f},{gc_hi:.2f}] or HP>{hp_max})")
 
-    # ── Encoding effects ──────────────────────────────────────────────────────
+    # -- Encoding effects ------------------------------------------------------
     raw_effect      = float(np.mean(ff_s) - np.mean(ff_c))
     overlap_effect  = (float(np.mean(ff_s[support_mask]) - np.mean(ff_c))
                        if support_mask.sum() > 0 else float('nan'))
@@ -245,7 +245,7 @@ def run_encoding_confound(
     return cells_df, summary
 
 
-# ── CLI ───────────────────────────────────────────────────────────────────────
+# -- CLI -----------------------------------------------------------------------
 
 def main():
     parser = argparse.ArgumentParser(
