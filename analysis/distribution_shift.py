@@ -8,12 +8,12 @@ R12 extension
 -------------
 The original four conditions only tested upward shifts starting from 9% or
 12%.  R12 adds:
-  • symmetric downward transfers (higher sub_rate → lower)
+  • symmetric downward transfers (higher sub_rate -> lower)
   • additional upward pairs to cover lower-rate sources (1%, 5%)
-  • `delta` (|tgt_rate − src_rate|) and `direction` ('up'/'down') per result
+  • `delta` (|tgt_rate - src_rate|) and `direction` ('up'/'down') per result
   • `auroc_drop` and `robust_transfer_auroc` alongside the ECE criterion
-  • `compute_transfer_radius()` — formal radius = max δ where every tested
-    pair at |Δ| ≤ δ satisfies BOTH robustness thresholds
+  • `compute_transfer_radius()` — formal radius = max delta where every tested
+    pair at |Delta| <= delta satisfies BOTH robustness thresholds
 
 This replaces the single "~3% transfer radius" claim with per-stratum,
 per-direction radius estimates that can differ across coverage depths and
@@ -22,7 +22,7 @@ the saved calibrated models see analysis/transfer_radius.py.
 
 Robustness thresholds (same as ROBUST_ECE / ROBUST_AUROC in transfer_radius.py):
   ECE degradation ratio  < 2.0   (< 2× ECE worsening)
-  AUROC drop             ≤ 0.05  (≤ 5 pp AUROC decrease)
+  AUROC drop             <= 0.05  (<= 5 pp AUROC decrease)
 
 Usage:
     python analysis/distribution_shift.py \\
@@ -45,14 +45,14 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'allocation'))
 
 
 TRANSFER_CONDITIONS = [
-    # ── Upward transfers (train low, test high) ─────────────────────────────
+    # -- Upward transfers (train low, test high) -----------------------------
     (0.01, 0.05, 'up_very_low'),
     (0.05, 0.09, 'up_low_to_mid'),
     (0.09, 0.12, 'up_mild'),
     (0.09, 0.15, 'up_moderate'),
     (0.09, 0.20, 'up_severe'),
     (0.12, 0.18, 'up_moderate_high'),
-    # ── Downward transfers (train high, test low) ───────────────────────────
+    # -- Downward transfers (train high, test low) ---------------------------
     (0.05, 0.01, 'down_very_low'),
     (0.09, 0.05, 'down_low_to_mid'),
     (0.12, 0.09, 'down_mild'),
@@ -67,7 +67,7 @@ _ROBUST_AUROC_DROP  = 0.05  # AUROC may not fall more than 5 pp
 
 
 def run_distribution_shift(
-    datasets:     Dict[str, tuple],   # key → (X_tr, X_val, X_te, y_tr, y_val, y_te, feat_names)
+    datasets:     Dict[str, tuple],   # key -> (X_tr, X_val, X_te, y_tr, y_val, y_te, feat_names)
     cfg:          dict,
     coverage:     int,
     encoding:     str,
@@ -163,13 +163,25 @@ def run_distribution_shift(
 def _train_and_calibrate(X_tr, y_tr, X_val, y_val, cfg, seed):
     """Train + calibrate XGBoost for distribution shift experiments."""
     from calibrate import CalibratedModel
+
+    y_tr_bin  = (y_tr  >= 0.5).astype(int)
+    y_val_bin = (y_val >= 0.5).astype(int)
+
+    # Single-class guard: XGBClassifier raises when train/eval_set label sets
+    # don't match (e.g. a saturated-regime source key with all-positive
+    # labels). Mirrors the guard in models/train.py.
+    if len(np.unique(y_tr_bin)) < 2 or len(np.unique(y_val_bin)) < 2:
+        from sklearn.dummy import DummyClassifier
+        dummy = DummyClassifier(strategy='most_frequent')
+        dummy.fit(X_tr, y_tr_bin)
+        cal = CalibratedModel(dummy, method='none')
+        cal.fit(X_val, y_val_bin)
+        return cal
+
     try:
         import xgboost as xgb  # type: ignore
     except ImportError:
         raise ImportError("xgboost required")
-
-    y_tr_bin  = (y_tr  >= 0.5).astype(int)
-    y_val_bin = (y_val >= 0.5).astype(int)
 
     clf = xgb.XGBClassifier(
         max_depth=4, learning_rate=0.1, n_estimators=300,
@@ -194,9 +206,9 @@ def compute_transfer_radius(
 ) -> Dict[str, dict]:
     """Compute formal per-direction transfer radius from a results dict.
 
-    Transfer radius (per direction) = max δ such that *every* tested pair
-    with |Δ| ≤ δ satisfies both robustness thresholds.  Pairs are evaluated
-    in ascending order of δ; the radius stops at the first delta where any
+    Transfer radius (per direction) = max delta such that *every* tested pair
+    with |Delta| <= delta satisfies both robustness thresholds.  Pairs are evaluated
+    in ascending order of delta; the radius stops at the first delta where any
     pair fails.
 
     Parameters
@@ -208,8 +220,8 @@ def compute_transfer_radius(
     Returns
     -------
     dict with keys 'up' and 'down', each containing:
-        transfer_radius      : max passing δ (0 if no pair passes)
-        first_failing_delta  : smallest δ where any pair fails (inf if none fail)
+        transfer_radius      : max passing delta (0 if no pair passes)
+        first_failing_delta  : smallest delta where any pair fails (inf if none fail)
         n_pairs_tested       : number of pairs in that direction
         n_pairs_robust       : number passing both thresholds
     """
@@ -292,7 +304,7 @@ def save_shift_results(results: dict, out_path: str):
     return df
 
 
-# ── CLI entry point ──────────────────────────────────────────────────────────
+# -- CLI entry point ----------------------------------------------------------
 
 def main():
     parser = argparse.ArgumentParser(description='Distribution shift analysis.')

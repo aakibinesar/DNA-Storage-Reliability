@@ -1,0 +1,5 @@
+key,model,regime,n,frac_total,class_prevalence,is_degenerate,auroc,pr_auc,f1,precision,recall,accuracy,ece,brier,regime_lo,regime_hi
+sub15_k5_simple,xgb_cal,under_failure,165,0.544554,0.000000,True,,,0.000000,0.000000,0.000000,1.000000,0.039740,0.003363,0.150000,0.850000
+sub15_k5_simple,xgb_cal,informative,138,0.455446,0.123188,False,0.974234,0.816053,0.615385,0.888889,0.470588,0.927536,0.061423,0.008106,0.150000,0.850000
+sub15_k5_simple,xgb_cal,saturated,0,0.000000,,True,,,,,,,,,0.150000,0.850000
+sub15_k5_simple,xgb_cal,aggregate,303,1.000000,0.056106,False,0.989099,0.816053,0.615385,0.888889,0.470588,0.966997,0.008471,0.005523,0.150000,0.850000

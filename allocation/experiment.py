@@ -14,12 +14,12 @@ Eight comparison conditions per config:
                   ranks by p_i(l_rs_default) - p_i(l_rs_default + delta)
   3. XGB_CAL   — calibrated XGBoost predictions
   4. XGB_RAW   — uncalibrated XGBoost outputs (shows why calibration matters)
-  5. GC_DEV    — rule baseline: |gc_content − 0.5|  (R10 non-ML baseline)
+  5. GC_DEV    — rule baseline: |gc_content - 0.5|  (R10 non-ML baseline)
   6. HP         — rule baseline: max homopolymer run length  (R10)
   7. COMPOSITE  — weighted GC-dev + HP rule  (R10; best non-ML competitor)
-  8. RANDOM     — random allocation control  (R10; should ≈ uniform)
+  8. RANDOM     — random allocation control  (R10; should ~= uniform)
 
-R2 fix: the oracle now uses marginal-benefit ranking (Δp_i = p(default) - p(default+delta))
+R2 fix: the oracle now uses marginal-benefit ranking (Deltap_i = p(default) - p(default+delta))
 instead of baseline failure_freq ranking.  A sequence in the over-failure regime that
 already fails 90 % of the time at the default parity level may still fail 90 % at
 default+delta — extra parity wastes the budget.  The marginal oracle promotes only
@@ -37,6 +37,8 @@ Seed partitioning (relative to base_seed from config):
   2000+d*100 .. 2000+d*100+n_runs-1  — delta-sensitivity evaluation per delta d
   3000     ..  3000+n_runs-1  — main-experiment marginal-benefit estimation (ORACLE_SEED_OFFSET)
   3000+d*100 .. 3000+d*100+n_runs-1  — delta-sensitivity oracle estimation per delta d
+  5000     ..  5000+n_runs-1  — main-experiment marginal-harm estimation (R4 fix, ORACLE_HARM_SEED_OFFSET)
+  5000+d*100 .. 5000+d*100+n_runs-1  — delta-sensitivity harm estimation per delta d
 
 Usage (CLI):
     python allocation/experiment.py --config configs/experiment_config.yaml \\
@@ -55,12 +57,13 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'models'))
 sys.path.insert(0, os.path.dirname(__file__))
 
-_ORACLE_SEED_OFFSET = 3000   # oracle marginal-benefit estimation
-_EVAL_SEED_OFFSET   = 1000   # main allocation evaluation runs
-_DELTA_SEED_OFFSET  = 2000   # delta-sensitivity evaluation runs
+_ORACLE_SEED_OFFSET      = 3000   # oracle marginal-benefit estimation
+_EVAL_SEED_OFFSET        = 1000   # main allocation evaluation runs
+_DELTA_SEED_OFFSET       = 2000   # delta-sensitivity evaluation runs
+_ORACLE_HARM_SEED_OFFSET = 5000   # oracle marginal-harm estimation (R4 fix)
 
 
-# ── Oracle marginal-benefit estimation (R2) ──────────────────────────────────
+# -- Oracle marginal-benefit estimation (R2) ----------------------------------
 
 def estimate_marginal_benefits(
     sequences:          List[str],
@@ -111,7 +114,63 @@ def estimate_marginal_benefits(
     return true_failure_freq - p_high   # positive = extra parity reduces failures
 
 
-# ── Common random number helper (R3) ─────────────────────────────────────────
+# -- Oracle marginal-harm estimation (R4) --------------------------------------
+
+def estimate_marginal_harm(
+    sequences:          List[str],
+    true_failure_freq:  np.ndarray,
+    channel,
+    coverage:           int,
+    l_rs_default:       int,
+    delta:              int,
+    n_runs:             int = 30,
+    base_seed:          int = 0,
+    harm_seed_offset:   int = _ORACLE_HARM_SEED_OFFSET,
+    l_rs_min:           int = 4,
+) -> np.ndarray:
+    """Estimate per-sequence marginal failure increase from losing delta parity.
+
+    Computes: marginal_harm_i = p_i(l_rs_default - delta) - p_i(l_rs_default)
+
+    Symmetric counterpart to estimate_marginal_benefits(). By RS decode-failure
+    monotonicity in parity bytes (for a fixed error realisation, fewer parity
+    bytes can only maintain or increase decode-failure probability, never
+    reduce it), this is expected to be >= 0.
+
+    This is the piece the original R2/R3 fixes were missing (R4): a sequence
+    can have near-zero benefit from ADDING parity for two very different
+    reasons -- it's already safe (demoting it is harmless), or it's already
+    deep in the saturated/over-failure regime (demoting it is actively
+    harmful, since it needs protection, not less of it). marginal_benefits
+    alone cannot distinguish these; marginal_harm is what tells them apart,
+    and is required for oracle_allocation_greedy_swap in mechanism.py.
+
+    Parameters
+    ----------
+    harm_seed_offset : seed offset relative to base_seed; use different values
+                       per delta sweep to keep estimation seeds non-overlapping
+                       with each other and with estimate_marginal_benefits.
+    """
+    from consensus_voter import majority_vote_consensus, count_errors
+
+    N     = len(sequences)
+    l_low = max(l_rs_default - delta, l_rs_min)
+
+    failures_low = np.zeros(N, dtype=np.float64)
+    for run_idx in range(n_runs):
+        run_channel = channel.clone(seed=base_seed + harm_seed_offset + run_idx)
+        for i, seq in enumerate(sequences):
+            reads      = run_channel.simulate(seq, coverage)
+            consensus  = majority_vote_consensus(reads, len(seq))
+            stats      = count_errors(seq, consensus)
+            if stats['byte_errors'] > l_low // 2:
+                failures_low[i] += 1
+
+    p_low = failures_low / n_runs
+    return p_low - true_failure_freq   # positive = removing parity increases failures
+
+
+# -- Common random number helper (R3) -----------------------------------------
 
 def _precompute_byte_errors(
     sequences: List[str],
@@ -135,12 +194,13 @@ def _precompute_byte_errors(
     return byte_errors
 
 
-# ── Main allocation experiment ────────────────────────────────────────────────
+# -- Main allocation experiment ------------------------------------------------
 
 def run_allocation_experiment(
     sequences:         List[str],
     true_failure_freq: np.ndarray,
     marginal_benefits: np.ndarray,
+    marginal_harm:     np.ndarray,
     calibrated_risk:   np.ndarray,
     raw_risk:          np.ndarray,
     channel,
@@ -164,6 +224,20 @@ def run_allocation_experiment(
             against the identical noise realisation — only the parity allocation
             differs.
 
+    R4 fix: the oracle previously ranked by marginal_benefits alone and forced
+            exactly N//2 promotions/demotions regardless of how many sequences
+            actually had a positive marginal benefit -- this let it demote
+            already-failing sequences (whose benefit-from-adding is near zero
+            for the wrong reason: they're saturated, not safe) and empirically
+            lost to uniform in 66/84 production configs. Now the oracle uses
+            oracle_allocation_greedy_swap(), which pairs the best promotion
+            candidate with the least-harmed demotion candidate and stops the
+            moment a swap is no longer net-beneficial -- this guarantees
+            oracle OFR <= uniform OFR by construction. The resulting swap
+            count (n_star) is then used as the tier size for the model and
+            every rule-based baseline, so all conditions share the same
+            oracle-determined budget and differ only in ranking quality.
+
     R10 fix: four rule-based baselines (gc_dev, hp, composite, random) are
              evaluated alongside the ML conditions so the paper can claim
              ML beats rule-based baselines.
@@ -171,6 +245,7 @@ def run_allocation_experiment(
     Parameters
     ----------
     marginal_benefits : array (N,) — pre-computed from estimate_marginal_benefits().
+    marginal_harm      : array (N,) — pre-computed from estimate_marginal_harm().
 
     Returns
     -------
@@ -178,22 +253,27 @@ def run_allocation_experiment(
     'ofr_gc_dev', 'ofr_hp', 'ofr_composite', 'ofr_random',
     each an array of shape (n_runs,).
     """
-    from mechanism import AllocationMechanism, uniform_allocation, oracle_allocation_marginal
+    from mechanism import AllocationMechanism, uniform_allocation, oracle_allocation_greedy_swap
     from baselines import get_baseline_allocations
 
     N             = len(sequences)
     l_rs_uniform  = uniform_allocation(N, l_rs_default)
     alloc         = AllocationMechanism(l_rs_default, delta, l_rs_min, l_rs_max)
-    l_rs_oracle   = oracle_allocation_marginal(
-        marginal_benefits, l_rs_default, delta, l_rs_min, l_rs_max
+    l_rs_oracle, n_star = oracle_allocation_greedy_swap(
+        marginal_benefits, marginal_harm, l_rs_default, delta, l_rs_min, l_rs_max,
+        n_runs=n_runs,
     )
-    l_rs_xgb_cal  = alloc.allocate(calibrated_risk)
-    l_rs_xgb_raw  = alloc.allocate(raw_risk)
+    tier_fraction = n_star / N if N > 0 else 0.0
+    if verbose:
+        print(f"  [allocation] Oracle made {n_star}/{N} swaps clearing the noise floor "
+              f"({tier_fraction:.1%} promoted/demoted)")
+    l_rs_xgb_cal  = alloc.allocate(calibrated_risk, tier_fraction=tier_fraction)
+    l_rs_xgb_raw  = alloc.allocate(raw_risk, tier_fraction=tier_fraction)
 
     # R10: rule-based baselines — allocations computed once from sequence features
     baseline_allocs = get_baseline_allocations(
         sequences, l_rs_default, delta, l_rs_min, l_rs_max,
-        random_seed=base_seed + 8000,
+        random_seed=base_seed + 8000, tier_fraction=tier_fraction,
     )
 
     ofr_uniform   = np.zeros(n_runs)
@@ -206,7 +286,7 @@ def run_allocation_experiment(
     ofr_random    = np.zeros(n_runs)
 
     for run_idx in range(n_runs):
-        # One channel clone → one byte-error array shared by all eight conditions (R3)
+        # One channel clone -> one byte-error array shared by all eight conditions (R3)
         run_channel = channel.clone(seed=base_seed + _EVAL_SEED_OFFSET + run_idx)
         byte_errors = _precompute_byte_errors(sequences, run_channel, coverage)
 
@@ -238,7 +318,7 @@ def run_allocation_experiment(
     }
 
 
-# ── Delta-sensitivity sweep ───────────────────────────────────────────────────
+# -- Delta-sensitivity sweep ---------------------------------------------------
 
 def run_delta_sensitivity(
     sequences:         List[str],
@@ -265,7 +345,7 @@ def run_delta_sensitivity(
     dict keyed by delta, each with arrays 'ofr_xgb_cal', 'ofr_oracle', 'ofr_uniform',
     'ofr_gc_dev', 'ofr_hp', 'ofr_composite', 'ofr_random'.
     """
-    from mechanism import AllocationMechanism, uniform_allocation, oracle_allocation_marginal
+    from mechanism import AllocationMechanism, uniform_allocation, oracle_allocation_greedy_swap
     from baselines import get_baseline_allocations
 
     N       = len(sequences)
@@ -284,18 +364,28 @@ def run_delta_sensitivity(
             oracle_seed_offset=_ORACLE_SEED_OFFSET + delta * 100,
             l_rs_max=l_rs_max,
         )
+        # R4: symmetric marginal harm, non-overlapping seed range per delta.
+        marginal_harm = estimate_marginal_harm(
+            sequences, true_failure_freq, channel, coverage,
+            l_rs_default, delta, n_runs,
+            base_seed=base_seed,
+            harm_seed_offset=_ORACLE_HARM_SEED_OFFSET + delta * 100,
+            l_rs_min=l_rs_min,
+        )
 
         alloc_mech = AllocationMechanism(l_rs_default, delta, l_rs_min, l_rs_max)
-        l_rs_xgb   = alloc_mech.allocate(calibrated_risk)
-        l_rs_ora   = oracle_allocation_marginal(
-            marginal_benefits, l_rs_default, delta, l_rs_min, l_rs_max
+        l_rs_ora, n_star = oracle_allocation_greedy_swap(
+            marginal_benefits, marginal_harm, l_rs_default, delta, l_rs_min, l_rs_max,
+            n_runs=n_runs,
         )
+        tier_fraction = n_star / N if N > 0 else 0.0
+        l_rs_xgb   = alloc_mech.allocate(calibrated_risk, tier_fraction=tier_fraction)
         l_rs_uni   = uniform_allocation(N, l_rs_default)
 
         # R10: baselines computed from sequence features — same sequences, delta varies
         baseline_allocs = get_baseline_allocations(
             sequences, l_rs_default, delta, l_rs_min, l_rs_max,
-            random_seed=base_seed + 8000 + delta * 100,
+            random_seed=base_seed + 8000 + delta * 100, tier_fraction=tier_fraction,
         )
 
         ofr_xgb = np.zeros(n_runs)
@@ -335,7 +425,7 @@ def run_delta_sensitivity(
     return results
 
 
-# ── Persistence ───────────────────────────────────────────────────────────────
+# -- Persistence ---------------------------------------------------------------
 
 def save_results(results: dict, out_path: str):
     """Save allocation experiment results as a compressed numpy archive."""
@@ -344,7 +434,7 @@ def save_results(results: dict, out_path: str):
     print(f"  [allocation] Saved to {out_path}")
 
 
-# ── CLI entry point ──────────────────────────────────────────────────────────
+# -- CLI entry point ----------------------------------------------------------
 
 def main():
     parser = argparse.ArgumentParser(
@@ -370,7 +460,7 @@ def main():
     n_runs    = args.n_runs or cfg['allocation']['n_monte_carlo_runs']
     base_seed = cfg['random_seed']
 
-    # Parse config key → sub_rate, coverage
+    # Parse config key -> sub_rate, coverage
     parts     = args.key.split('_')
     sub_rate  = int(parts[0].replace('sub', '')) / 100
     coverage  = int(parts[1].replace('k', ''))
@@ -414,10 +504,21 @@ def main():
         l_rs_max=l_rs_max,
     )
 
+    # R4: compute marginal harm (symmetric to marginal benefits) so the oracle
+    # can tell "safe to demote" apart from "already failing, don't demote"
+    print(f"[allocation] Estimating marginal harm (oracle) ...")
+    marginal_harm = estimate_marginal_harm(
+        sequences, y_te, channel, coverage,
+        l_rs_default, args.delta, n_runs,
+        base_seed=base_seed,
+        harm_seed_offset=_ORACLE_HARM_SEED_OFFSET,
+        l_rs_min=l_rs_min,
+    )
+
     os.makedirs(args.out, exist_ok=True)
 
     ofr_results = run_allocation_experiment(
-        sequences, y_te, marginal_benefits, calibrated_risk, raw_risk,
+        sequences, y_te, marginal_benefits, marginal_harm, calibrated_risk, raw_risk,
         channel, coverage, l_rs_default, args.delta,
         n_runs=n_runs, base_seed=base_seed,
         l_rs_min=l_rs_min, l_rs_max=l_rs_max,

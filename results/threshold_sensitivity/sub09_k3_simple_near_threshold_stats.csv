@@ -1,0 +1,2 @@
+n_total,n_near_threshold,frac_near,ci_width_mean,ci_width_near_threshold,threshold,n_runs,alpha
+306,63,0.205882,0.261559,0.332027,0.500000,30,0.050000

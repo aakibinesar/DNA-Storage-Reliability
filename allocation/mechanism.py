@@ -3,12 +3,12 @@ allocation/mechanism.py
 =======================
 Budget-neutral two-threshold greedy redundancy redistribution.
 
-Given calibrated risk scores r_i ∈ [0, 1] for N sequences and a fixed total
+Given calibrated risk scores r_i in [0, 1] for N sequences and a fixed total
 redundancy budget B = N × L_RS_default:
 
   1. Sort sequences by risk score.
-  2. Label the top-p fraction as HIGH-RISK   → allocate L_RS + delta parity bytes.
-  3. Label the bottom-p fraction as LOW-RISK  → allocate L_RS - delta parity bytes.
+  2. Label the top-p fraction as HIGH-RISK   -> allocate L_RS + delta parity bytes.
+  3. Label the bottom-p fraction as LOW-RISK  -> allocate L_RS - delta parity bytes.
   4. Middle fraction keeps L_RS (neutral tier).
 
 Budget neutrality: |HIGH| × delta = |LOW| × delta (by construction: |HIGH| = |LOW| = p × N).
@@ -96,11 +96,15 @@ class AllocationMechanism:
             return l_rs_alloc
 
         if tier_fraction is None:
-            n_tier = max_tier
+            n_tier = max(1, max_tier)
         else:
-            n_tier = min(int(N * tier_fraction), max_tier)
-
-        n_tier = max(1, n_tier)
+            # R4 fix: an explicit tier_fraction (e.g. the oracle's n_star / N) is
+            # honoured exactly, including 0 -- if the oracle found no beneficial
+            # swaps for this config, the model/baselines should also make none,
+            # rather than being forced to move at least one sequence anyway.
+            n_tier = min(int(round(N * tier_fraction)), max_tier)
+            if n_tier == 0:
+                return l_rs_alloc
 
         # Rank by risk score
         sorted_idx = np.argsort(risk_scores)
@@ -122,7 +126,7 @@ class AllocationMechanism:
             diff = total_budget - actual_budget
             neutral_idx = sorted_idx[n_tier:-n_tier] if n_tier < N // 2 else []
             if len(neutral_idx) > 0 and diff != 0:
-                # Distribute correction across neutral sequences (fractional bytes → round)
+                # Distribute correction across neutral sequences (fractional bytes -> round)
                 per_seq = diff // len(neutral_idx)
                 remainder = diff - per_seq * len(neutral_idx)
                 l_rs_alloc[neutral_idx] = np.clip(
@@ -171,7 +175,7 @@ class AllocationMechanism:
         }
 
 
-# ── Oracle and uniform baselines ────────────────────────────────────────────
+# -- Oracle and uniform baselines --------------------------------------------
 
 def uniform_allocation(N: int, l_rs_default: int) -> np.ndarray:
     """Baseline: all sequences get identical parity allocation."""
@@ -219,6 +223,129 @@ def oracle_allocation_marginal(
     """
     alloc = AllocationMechanism(l_rs_default, delta, l_rs_min, l_rs_max)
     return alloc.allocate(marginal_benefits)
+
+
+def oracle_allocation_greedy_swap(
+    marginal_benefits: np.ndarray,
+    marginal_harm:     np.ndarray,
+    l_rs_default: int,
+    delta: int,
+    l_rs_min: int = 4,
+    l_rs_max: int = 16,
+    n_runs: int = 30,
+    z_threshold: float = 1.0,
+) -> Tuple[np.ndarray, int]:
+    """True oracle (R4 fix): budget-neutral swaps, made only while net-beneficial
+    AND the benefit clears a noise floor derived from the estimation sample size.
+
+    oracle_allocation_marginal (above) had a real bug: it ranked ALL sequences by
+    a single metric (benefit from adding delta) and forced exactly N//2 promotions
+    and N//2 demotions, regardless of how many sequences actually had a positive
+    marginal benefit. A sequence with marginal_benefit near zero could mean either
+    "already safe -- extra parity doesn't matter" (fine to demote) or "already
+    deep in the saturated/over-failure regime -- extra parity can't save it either"
+    (actively harmful to demote further) -- the old code could not tell these
+    apart, and empirically this caused the oracle to lose to uniform allocation
+    in 66/84 production configs, since it was forced to demote already-failing
+    sequences just to hit the fixed 50% tier size.
+
+    This version uses two independent per-sequence signals -- benefit from
+    promotion and harm from demotion (see estimate_marginal_harm in
+    experiment.py) -- and greedily pairs the best promotion candidate with the
+    least-harmed demotion candidate, one swap at a time. Requiring only
+    benefit > harm is NOT enough in practice: marginal_benefits/marginal_harm
+    are each estimated from only n_runs simulator runs, so individual
+    per-sequence estimates carry substantial sampling noise (empirically,
+    std(marginal_benefit) ~ 0.10 against a true population mean near 0 --
+    i.e. most of the apparent per-sequence variation is noise, not signal).
+    Greedily selecting the noisiest-looking "best" and "safest" sequences is a
+    textbook winner's-curse: it looks great evaluated on the same noisy
+    estimates used to select it, then regresses on a fresh evaluation sample
+    -- confirmed empirically (oracle still lost to uniform on real production
+    data even after the benefit>harm fix alone). So a swap is now only made
+    if its margin (benefit - harm) clears an analytically-derived noise floor:
+    for two independent binomial-proportion estimates from n_runs trials each,
+    Var(p) <= 0.25/n_runs, so Var(benefit_i - harm_j) <= 4 * 0.25/n_runs (four
+    independent proportion terms: p_default_i, p_high_i, p_low_j, p_default_j),
+    giving SE <= 1/sqrt(n_runs). Empirically swept z in {0..4} across several
+    production configs (see allocation experiment notes): z=2.0 fully
+    eliminates residual losses in no-signal configs but also suppresses real,
+    fresh-sample-confirmed wins in signal-rich configs (e.g. a genuine 3.4%
+    OFR reduction collapsed to a wash). z=1.0 was chosen as the default
+    instead -- it recovers most of the real wins while bounding the residual
+    loss in no-signal configs to a small, explicitly reportable magnitude
+    (observed: <=2.7% relative, versus 3-6% under the original unfixed
+    oracle). This is a deliberate trade-off, not a guarantee: at z=1.0 the
+    oracle can still show a small loss to uniform in configs with
+    insufficient true signal at n_runs=30 -- that should be reported
+    transparently as a limitation, not hidden by pushing z higher.
+
+    Because a swap is only made once it clears both the net-benefit AND the
+    noise-floor bar, large systematic losses (the original bug: 66/84 configs,
+    often 3-6%) are structurally impossible; only small, bounded ones can
+    remain, and only in genuinely low-signal configs.
+
+    Parameters
+    ----------
+    marginal_benefits : array (N,) of p_i(l_rs_default) - p_i(l_rs_default + delta).
+                         Positive = sequence benefits from promotion.
+    marginal_harm      : array (N,) of p_i(l_rs_default - delta) - p_i(l_rs_default).
+                         Positive = sequence is hurt by demotion (the common case,
+                         by RS decode-failure monotonicity in parity bytes).
+    n_runs             : number of simulator runs each per-sequence probability
+                         estimate is based on -- used to size the noise floor.
+    z_threshold        : how many standard errors of margin to require before
+                         trusting a swap. Higher = more conservative (fewer,
+                         more confident swaps); 0.0 recovers the benefit>harm-
+                         only behaviour (not recommended -- see above).
+
+    Returns
+    -------
+    l_rs_alloc : budget-neutral parity allocation, shape (N,).
+    n_star     : number of promote/demote swaps actually made. Pass
+                 tier_fraction = n_star / N to AllocationMechanism.allocate()
+                 for the model and rule-based baselines, so every condition is
+                 compared using the same oracle-determined budget size and
+                 differs only in which sequences it picks to fill it.
+    """
+    N = len(marginal_benefits)
+    l_rs_alloc = np.full(N, l_rs_default, dtype=int)
+    if N == 0 or delta == 0:
+        return l_rs_alloc, 0
+    if (l_rs_default + delta) > l_rs_max or (l_rs_default - delta) < l_rs_min:
+        return l_rs_alloc, 0
+
+    margin_threshold = z_threshold / np.sqrt(max(n_runs, 1))
+
+    promote_order = np.argsort(-marginal_benefits)  # best promotion candidates first
+    demote_order  = np.argsort(marginal_harm)        # least-harmed demotion candidates first
+
+    used      = np.zeros(N, dtype=bool)
+    max_swaps = N // 2
+    n_star    = 0
+    pi = di = 0
+
+    while n_star < max_swaps:
+        while pi < N and used[promote_order[pi]]:
+            pi += 1
+        while di < N and used[demote_order[di]]:
+            di += 1
+        if pi >= N or di >= N:
+            break
+        p_idx, d_idx = promote_order[pi], demote_order[di]
+        if p_idx == d_idx:
+            pi += 1  # same sequence can't fill both roles -- try the next candidate
+            continue
+        if marginal_benefits[p_idx] - marginal_harm[d_idx] <= margin_threshold:
+            break  # best remaining swap doesn't clear the noise floor -- stop
+        l_rs_alloc[p_idx] = l_rs_default + delta
+        l_rs_alloc[d_idx] = l_rs_default - delta
+        used[p_idx] = used[d_idx] = True
+        n_star += 1
+        pi += 1
+        di += 1
+
+    return l_rs_alloc, n_star
 
 
 def miscalibrated_allocation(

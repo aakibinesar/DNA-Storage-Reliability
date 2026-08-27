@@ -119,7 +119,7 @@ class CalibratedModel:
         return np.clip(self.base_model.predict(X), 0.0, 1.0)
 
 
-# ── Internal calibration components ─────────────────────────────────────────
+# -- Internal calibration components -----------------------------------------
 
 class _PlattScaler:
     """Platt scaling via direct NLL minimisation — supports continuous targets in [0, 1].
@@ -181,7 +181,7 @@ def _fit_temperature(proba: np.ndarray, y: np.ndarray) -> float:
     return float(result.x)
 
 
-# ── Standalone calibration utilities ─────────────────────────────────────────
+# -- Standalone calibration utilities -----------------------------------------
 
 def calibration_curve_data(
     y_true: np.ndarray,

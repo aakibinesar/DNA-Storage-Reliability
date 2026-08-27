@@ -31,11 +31,11 @@ For each variant:
 
 Interpretation
 --------------
-  - AUROC stays high across all variants  →  model learned genuine signal
+  - AUROC stays high across all variants  ->  model learned genuine signal
     beyond the injected GC/HP rules.
-  - AUROC drops on flat_skew but not on no_gc_skew / no_hp_stutter  →  model
+  - AUROC drops on flat_skew but not on no_gc_skew / no_hp_stutter  ->  model
     learned both mechanisms independently.
-  - AUROC drops to ~0.5 on flat_skew  →  model primarily learned the injected
+  - AUROC drops to ~0.5 on flat_skew  ->  model primarily learned the injected
     rules; this is the pessimistic outcome and should be stated as a limitation.
 
 Usage (CLI):
@@ -61,7 +61,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'models'))
 ABLATION_VARIANTS = ['full', 'no_gc_skew', 'no_hp_stutter', 'flat_skew']
 
 
-# ── Per-sequence failure-frequency estimation under an ablated channel ────────
+# -- Per-sequence failure-frequency estimation under an ablated channel --------
 
 def estimate_failure_freq(
     sequences:   List[str],
@@ -97,7 +97,7 @@ def estimate_failure_freq(
     return failures / n_runs
 
 
-# ── Main ablation experiment ──────────────────────────────────────────────────
+# -- Main ablation experiment --------------------------------------------------
 
 def run_channel_ablation(
     sequences:   List[str],
@@ -184,7 +184,7 @@ def run_channel_ablation(
     return pd.DataFrame(rows)
 
 
-# ── CLI entry point ───────────────────────────────────────────────────────────
+# -- CLI entry point -----------------------------------------------------------
 
 def main():
     parser = argparse.ArgumentParser(

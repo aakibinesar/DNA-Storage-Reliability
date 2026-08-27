@@ -6,7 +6,7 @@ demonstrate that model quality metrics are not highly sensitive to threshold cho
 
 Background
 ----------
-With M=30 Monte Carlo runs a sequence's failure_freq has 95% Wilson CI ≈ ±0.18
+With M=30 Monte Carlo runs a sequence's failure_freq has 95% Wilson CI ~= ±0.18
 at p=0.5, so sequences with true failure probability in (0.32, 0.68) may be
 mislabelled by the binary rule.  This script:
 
@@ -45,7 +45,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'models'))
 
 
-# ── Core analysis functions (used by both CLI and pipeline stage) ─────────────
+# -- Core analysis functions (used by both CLI and pipeline stage) -------------
 
 def run_threshold_sensitivity(
     y_true: np.ndarray,
@@ -103,7 +103,7 @@ def run_threshold_sensitivity(
     return sweep_df, nt
 
 
-# ── CLI entry point ───────────────────────────────────────────────────────────
+# -- CLI entry point -----------------------------------------------------------
 
 def main():
     parser = argparse.ArgumentParser(
@@ -115,7 +115,7 @@ def main():
     parser.add_argument('--models-dir', default='models/saved/')
     parser.add_argument('--out',        default='results/threshold_sensitivity/')
     parser.add_argument('--alpha',      type=float, default=0.05,
-                        help='CI significance level (default 0.05 → 95%% CI)')
+                        help='CI significance level (default 0.05 -> 95%% CI)')
     args = parser.parse_args()
 
     with open(args.config) as f:

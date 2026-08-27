@@ -6,7 +6,7 @@ Generates all 16 dataset configurations and writes them to Parquet files:
 
 Each Parquet file contains:
   - dna_sequence       : DNA string
-  - failure_freq       : soft label ∈ [0, 1] (empirical failure probability)
+  - failure_freq       : soft label in [0, 1] (empirical failure probability)
   - byte_errors_mean   : mean byte errors across M=30 runs
   - label_binary       : hard binary label (threshold at 0.5)
   - <feature columns>  : full feature matrix
@@ -252,7 +252,7 @@ def get_all_config_keys(cfg: dict) -> List[str]:
     ]
 
 
-# ── CLI entry point ──────────────────────────────────────────────────────────
+# -- CLI entry point ----------------------------------------------------------
 
 def main():
     parser = argparse.ArgumentParser(

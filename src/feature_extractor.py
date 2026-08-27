@@ -33,7 +33,7 @@ from typing import Dict, List, Optional, Sequence, Tuple
 import numpy as np
 
 
-# ── Constants ────────────────────────────────────────────────────────────────
+# -- Constants ----------------------------------------------------------------
 
 BASES     = 'ACGT'
 COMPLEMENT = {'A': 'T', 'T': 'A', 'G': 'C', 'C': 'G'}
@@ -43,7 +43,7 @@ DINUCS  = [''.join(p) for p in product(BASES, repeat=2)]
 TRINUCS = [''.join(p) for p in product(BASES, repeat=3)]
 
 
-# ── Top-level API ────────────────────────────────────────────────────────────
+# -- Top-level API ------------------------------------------------------------
 
 def extract_features(
     sequences: List[str],
@@ -90,7 +90,7 @@ def _extract_single(
         features.append(float(value))
         names.append(name)
 
-    # ─── Group 1: Global composition ─────────────────────────────────────────
+    # --- Group 1: Global composition -----------------------------------------
     gc   = sum(1 for b in seq if b in 'GC') / L
     at   = sum(1 for b in seq if b in 'AT') / L
     frac = {b: seq.count(b) / L for b in BASES}
@@ -112,7 +112,7 @@ def _extract_single(
     add((g - c) / max(g + c, 1), 'gc_skew')
     add((a - t) / max(a + t, 1), 'at_skew')
 
-    # ─── Group 2: Windowed GC content ────────────────────────────────────────
+    # --- Group 2: Windowed GC content ----------------------------------------
     for w in gc_windows:
         gc_win = _windowed_gc(seq, w)
         add(np.mean(gc_win),  f'gc_win{w}_mean')
@@ -125,7 +125,7 @@ def _extract_single(
     add(np.mean(ent_win), 'entropy_windowed_mean')
     add(np.std(ent_win),  'entropy_windowed_std')
 
-    # ─── Group 3: Homopolymer statistics ─────────────────────────────────────
+    # --- Group 3: Homopolymer statistics -------------------------------------
     hp_runs = _homopolymer_runs(seq)
     all_runs = [r for runs in hp_runs.values() for r in runs]
     max_hp   = max(all_runs, key=lambda r: r[1])[1] if all_runs else 0
@@ -149,7 +149,7 @@ def _extract_single(
         centroid = 0.5
     add(centroid, 'homopolymer_centroid_pos')
 
-    # ─── Group 4: k-mer frequencies ──────────────────────────────────────────
+    # --- Group 4: k-mer frequencies ------------------------------------------
     di_counts = Counter(seq[i:i+2] for i in range(L - 1))
     for dn in DINUCS:
         add(di_counts.get(dn, 0) / max(L - 1, 1), f'dinuc_{dn}')
@@ -159,14 +159,14 @@ def _extract_single(
     for tn in TRINUCS[:16]:
         add(tri_counts.get(tn, 0) / max(L - 2, 1), f'trinuc_{tn}')
 
-    # ─── Group 5: Structural proxies ─────────────────────────────────────────
+    # --- Group 5: Structural proxies -----------------------------------------
     add(_palindrome_count(seq, min_len=4),     'palindrome_count')
     add(_hairpin_score(seq),                   'hairpin_score')
     add(_approximate_free_energy(seq),         'approx_free_energy')
     add(_repeat_fraction(seq, repeat_len=4),   'repeat_fraction')
     add(_inverted_repeat_count(seq, min_len=4),'inverted_repeat_count')
 
-    # ─── Group 6: Positional & constraint ────────────────────────────────────
+    # --- Group 6: Positional & constraint ------------------------------------
     add(0.0 / L, 'dist_to_start')   # 0 for sequence-level features (not per-base)
     add(1.0,     'dist_to_end')     # 1.0 = full sequence
 
@@ -189,7 +189,7 @@ def _extract_single(
     return features, names
 
 
-# ── Feature selection helper (REFORM-style) ──────────────────────────────────
+# -- Feature selection helper (REFORM-style) ----------------------------------
 
 def select_features(
     X: np.ndarray,
@@ -275,7 +275,7 @@ def select_features(
     return X[:, selected], selected_names, selected
 
 
-# ── Internal computation helpers ─────────────────────────────────────────────
+# -- Internal computation helpers ---------------------------------------------
 
 def _gc(seq: str) -> float:
     if not seq:
@@ -420,7 +420,7 @@ def _repeat_fraction(seq: str, repeat_len: int = 4) -> float:
     return min(repeated_bases / L, 1.0)
 
 
-# ── Feature names (for export) ────────────────────────────────────────────────
+# -- Feature names (for export) ------------------------------------------------
 
 def get_feature_names(
     gc_windows: Tuple[int, ...] = (10, 20, 40),
@@ -431,7 +431,7 @@ def get_feature_names(
     return names
 
 
-# ── Convenience wrapper ──────────────────────────────────────────────────────
+# -- Convenience wrapper ------------------------------------------------------
 
 FEATURE_NAMES = get_feature_names()   # module-level constant
 

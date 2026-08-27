@@ -12,7 +12,7 @@ dominated by the under-failure and saturated regimes:
   • under_failure (ff < lo): model outputs near-0 for near-0 labels —
     accuracy is trivially high; AUROC is degenerate (all-negative).
   • saturated (ff > hi): symmetric — model outputs near-1 for near-1 labels.
-  • informative (lo ≤ ff ≤ hi): the regime where allocation decisions are
+  • informative (lo <= ff <= hi): the regime where allocation decisions are
     actually made and where model quality genuinely matters.
 
 Aggregate metrics across all three regimes therefore hide whether the model
@@ -54,7 +54,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'models'))
 _INFORMATIVE_WARNING_THRESHOLD = 0.10  # warn if informative < 10% of test set
 
 
-# ── Core analysis (used by CLI and pipeline stage) ────────────────────────────
+# -- Core analysis (used by CLI and pipeline stage) ----------------------------
 
 def run_regime_evaluation(
     failure_freq: np.ndarray,
@@ -127,7 +127,7 @@ def _print_regime_table(df: pd.DataFrame, key: str):
               f"{_fmt(r['ece']):>7} {_fmt(r['brier']):>7} {degen:>6}")
 
 
-# ── CLI entry point ───────────────────────────────────────────────────────────
+# -- CLI entry point -----------------------------------------------------------
 
 def main():
     parser = argparse.ArgumentParser(
@@ -201,7 +201,7 @@ def main():
     out_path  = os.path.join(args.out, 'regime_evaluation_all.csv')
     combined.to_csv(out_path, index=False, float_format='%.6f')
     print(f"\n[regime_evaluation] Saved combined table "
-          f"({len(combined)} rows × {len(combined.columns)} cols) → {out_path}")
+          f"({len(combined)} rows × {len(combined.columns)} cols) -> {out_path}")
 
     # Cross-config summary
     info_df = combined[combined['regime'] == 'informative']

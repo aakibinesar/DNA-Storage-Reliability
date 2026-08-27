@@ -10,16 +10,16 @@ Background
 Aggregate ECE reported over the full test set is dominated by the
 under-failure and saturated regimes, where calibration is trivially good:
 
-  • under_failure (ff < lo): model outputs near-0, labels ≈ 0 → small ECE
+  • under_failure (ff < lo): model outputs near-0, labels ~= 0 -> small ECE
     regardless of discrimination ability.
-  • saturated (ff > hi): symmetric — model outputs near-1, labels ≈ 1.
-  • informative (lo ≤ ff ≤ hi): the regime where the model's predictions
+  • saturated (ff > hi): symmetric — model outputs near-1, labels ~= 1.
+  • informative (lo <= ff <= hi): the regime where the model's predictions
     actually matter for downstream allocation decisions.
 
 Reporting only aggregate ECE can therefore hide poor calibration in the
 informative regime.  This script exposes the delta:
 
-    Δ_ECE = ECE_informative − ECE_aggregate
+    Delta_ECE = ECE_informative - ECE_aggregate
 
 and provides bootstrap 95% CIs so the magnitude is statistically bounded.
 
@@ -31,7 +31,7 @@ in the informative regime.  Override with --lo and --hi.
 Outputs
 -------
   <out>/<key>_calibration_regimes.csv    — per-regime ECE/Brier table
-  <out>/<key>_calibration_delta.csv      — Δ_ECE and Δ_Brier summary
+  <out>/<key>_calibration_delta.csv      — Delta_ECE and Delta_Brier summary
 
 Usage (CLI):
     python analysis/calibration_regimes.py \\
@@ -53,7 +53,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'models'))
 
 
-# ── Core analysis (used by CLI and pipeline stage) ────────────────────────────
+# -- Core analysis (used by CLI and pipeline stage) ----------------------------
 
 def run_calibration_regimes(
     failure_freq: np.ndarray,
@@ -76,7 +76,7 @@ def run_calibration_regimes(
     -------
     (regime_df, delta_df)
       regime_df : DataFrame with ECE/Brier per regime (+ bootstrap CIs)
-      delta_df  : DataFrame summarising Δ_ECE and Δ_Brier
+      delta_df  : DataFrame summarising Delta_ECE and Delta_Brier
     """
     from evaluate import calibration_by_regime
 
@@ -146,7 +146,7 @@ def run_calibration_regimes(
     return regime_df, delta_df
 
 
-# ── CLI entry point ───────────────────────────────────────────────────────────
+# -- CLI entry point -----------------------------------------------------------
 
 def main():
     parser = argparse.ArgumentParser(
@@ -164,7 +164,7 @@ def main():
     parser.add_argument('--n-bootstrap', type=int, default=500,
                         help='Bootstrap replicates for CI (default 500; 0 = skip CIs)')
     parser.add_argument('--alpha',       type=float, default=0.05,
-                        help='CI significance level (default 0.05 → 95%%)')
+                        help='CI significance level (default 0.05 -> 95%%)')
     args = parser.parse_args()
 
     with open(args.config) as f:

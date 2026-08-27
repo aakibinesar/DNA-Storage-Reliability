@@ -1,0 +1,3 @@
+direction,transfer_radius,first_failing_delta,n_pairs_tested,n_pairs_robust
+up,0.030000,0.040000,6,2
+down,0.030000,0.040000,6,4

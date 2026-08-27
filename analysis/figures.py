@@ -36,7 +36,7 @@ warnings.filterwarnings('ignore')
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'models'))
 
-# ── Matplotlib setup (non-interactive backend) ──────────────────────────────
+# -- Matplotlib setup (non-interactive backend) ------------------------------
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
@@ -75,7 +75,7 @@ def _setup_style():
     })
 
 
-# ── Figure 2: Reliability Diagrams ──────────────────────────────────────────
+# -- Figure 2: Reliability Diagrams ------------------------------------------
 
 def figure2_reliability_diagrams(
     y_true_list:       List[np.ndarray],
@@ -125,7 +125,7 @@ def figure2_reliability_diagrams(
     _save_fig(fig, out_path)
 
 
-# ── Figure 3: SHAP Feature Importance ───────────────────────────────────────
+# -- Figure 3: SHAP Feature Importance ---------------------------------------
 
 def figure3_shap_importance(
     importances:   np.ndarray,
@@ -156,7 +156,7 @@ def figure3_shap_importance(
     _save_fig(fig, out_path)
 
 
-# ── Figure 4: OFR vs. Delta ──────────────────────────────────────────────────
+# -- Figure 4: OFR vs. Delta --------------------------------------------------
 
 def figure4_ofr_vs_delta(
     delta_results: Dict[int, Dict[str, np.ndarray]],
@@ -207,7 +207,7 @@ def figure4_ofr_vs_delta(
     _save_fig(fig, out_path)
 
 
-# ── Figure 5: Distribution Shift ────────────────────────────────────────────
+# -- Figure 5: Distribution Shift --------------------------------------------
 
 def figure5_distribution_shift(
     shift_results: Dict[str, dict],
@@ -232,7 +232,7 @@ def figure5_distribution_shift(
         ax.bar(x - w/2, metric_in, w, label='In-distribution', color=PALETTE['xgb_cal'], alpha=0.8)
         ax.bar(x + w/2, metric_out, w, label='Transfer',       color=PALETTE['xgb_raw'], alpha=0.8)
         ax.set_xticks(x)
-        ax.set_xticklabels([l.replace('->', '→') for l in labels], rotation=20, ha='right')
+        ax.set_xticklabels([l.replace('->', '->') for l in labels], rotation=20, ha='right')
         ax.set_ylabel(ylabel)
         ax.set_title(f'{title}\nIn-distribution vs. Transfer')
         ax.legend()
@@ -241,7 +241,7 @@ def figure5_distribution_shift(
     _save_fig(fig, out_path)
 
 
-# ── Figure S1: Feature Distributions ────────────────────────────────────────
+# -- Figure S1: Feature Distributions ----------------------------------------
 
 def figure_s1_feature_distributions(
     X_simple:      np.ndarray,
@@ -274,7 +274,7 @@ def figure_s1_feature_distributions(
     _save_fig(fig, out_path)
 
 
-# ── Figure S4: Cost-Reliability Trade-off ───────────────────────────────────
+# -- Figure S4: Cost-Reliability Trade-off -----------------------------------
 
 def figure_s4_cost_reliability(
     delta_results: Dict[int, Dict[str, np.ndarray]],
@@ -301,7 +301,7 @@ def figure_s4_cost_reliability(
     _save_fig(fig, out_path)
 
 
-# ── Utility ──────────────────────────────────────────────────────────────────
+# -- Utility ------------------------------------------------------------------
 
 def _save_fig(fig, out_path: str, dpi: int = FIG_DPI):
     os.makedirs(os.path.dirname(out_path) or '.', exist_ok=True)
@@ -310,7 +310,7 @@ def _save_fig(fig, out_path: str, dpi: int = FIG_DPI):
     print(f"  [figures] Saved {out_path}")
 
 
-# ── CLI entry point ──────────────────────────────────────────────────────────
+# -- CLI entry point ----------------------------------------------------------
 
 def _load_allocation_delta_results(alloc_dir: str, cfg: dict) -> Dict[int, Dict[str, np.ndarray]]:
     """Aggregate OFR arrays from all NPZ files, keyed by delta.
@@ -371,7 +371,7 @@ def main():
     seed    = cfg['random_seed']
     seq_cfg = cfg['sequence']
 
-    # ── Figure S1: feature distributions ─────────────────────────────────────
+    # -- Figure S1: feature distributions -------------------------------------
     print("[figures] Generating diagnostic feature-distribution figure (S1)...")
     from sequence_generator import generate_sequences
     from feature_extractor import extract_features
@@ -391,7 +391,7 @@ def main():
         out_path=os.path.join(out, 'fig_s1_feature_distributions.png')
     )
 
-    # ── Figures 4 + S4: OFR vs. delta ────────────────────────────────────────
+    # -- Figures 4 + S4: OFR vs. delta ----------------------------------------
     alloc_dir = os.path.join(os.path.dirname(out), '..', 'results', 'allocation')
     alloc_dir = os.path.normpath(alloc_dir)
     if not os.path.isdir(alloc_dir):
@@ -412,7 +412,7 @@ def main():
     else:
         print("  [figures] No allocation NPZ files found — skipping Figures 4/S4")
 
-    # ── Figure 5: distribution shift ──────────────────────────────────────────
+    # -- Figure 5: distribution shift ------------------------------------------
     shift_dir = os.path.normpath(os.path.join(
         os.path.dirname(__file__), '..', 'results', 'distribution_shift'))
     print(f"[figures] Loading distribution shift results from {shift_dir} ...")
@@ -425,7 +425,7 @@ def main():
     else:
         print("  [figures] No distribution shift CSV files found — skipping Figure 5")
 
-    # ── Figures 2 + 3: reliability diagrams + SHAP ───────────────────────────
+    # -- Figures 2 + 3: reliability diagrams + SHAP ---------------------------
     models_dir = os.path.normpath(os.path.join(
         os.path.dirname(__file__), '..', 'models', 'saved'))
     rep_configs = ['sub12_k3_simple', 'sub09_k3_simple', 'sub05_k5_simple', 'sub05_k5_constrained']

@@ -120,7 +120,7 @@ def is_decoding_failure(
     return n_byte_errors > correction_capacity
 
 
-# ── Internal helpers ─────────────────────────────────────────────────────────
+# -- Internal helpers ---------------------------------------------------------
 
 def _normalise_read(read: str, expected_len: int) -> str:
     """Trim or pad a read to match *expected_len*.
@@ -159,8 +159,8 @@ def simulate_coverage_statistics(
     """Run consensus over a list of sequences and return aggregate statistics.
 
     Useful for the go/no-go sanity checks described in the implementation plan:
-      - K=30, 1% sub   → consensus error rate < 0.1%
-      - K=10, 12% sub  → consensus error rate ≈ 3–5%
+      - K=30, 1% sub   -> consensus error rate < 0.1%
+      - K=10, 12% sub  -> consensus error rate ~= 3–5%
 
     Parameters
     ----------

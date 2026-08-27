@@ -12,8 +12,8 @@ Layer 1 metrics (Table 1):
 
 Layer 2 metrics (Table 2):
   - Oligo Failure Rate (OFR) = fraction of oligos that fail RS decoding after allocation
-  - OFR reduction = (OFR_uniform − OFR_method) / OFR_uniform
-  - Efficiency ratio = (OFR_uniform − OFR_model) / (OFR_uniform − OFR_oracle)
+  - OFR reduction = (OFR_uniform - OFR_method) / OFR_uniform
+  - Efficiency ratio = (OFR_uniform - OFR_model) / (OFR_uniform - OFR_oracle)
   - Paired t-test p-value and Cohen's d
 
 Terminology note (R5):
@@ -36,7 +36,7 @@ from typing import Dict, List, Optional, Tuple
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
 
-# ── Calibration metrics ──────────────────────────────────────────────────────
+# -- Calibration metrics ------------------------------------------------------
 
 def expected_calibration_error(
     y_true: np.ndarray,
@@ -117,7 +117,7 @@ def brier_score_decomposed(
     }
 
 
-# ── R9: bootstrap CIs + regime-stratified calibration ───────────────────────
+# -- R9: bootstrap CIs + regime-stratified calibration -----------------------
 
 def bootstrap_calibration_ci(
     y_true: np.ndarray,
@@ -127,14 +127,14 @@ def bootstrap_calibration_ci(
     alpha: float = 0.05,
     seed: int = 0,
 ) -> Tuple[float, float, float]:
-    """Bootstrap (1−alpha) confidence interval for a scalar calibration metric.
+    """Bootstrap (1-alpha) confidence interval for a scalar calibration metric.
 
     Parameters
     ----------
     y_true, y_prob : arrays (N,) — targets and predictions
-    metric_fn      : callable(y_true, y_prob) → float
+    metric_fn      : callable(y_true, y_prob) -> float
     n_bootstrap    : bootstrap replicates; set 0 to skip (returns NaN CI)
-    alpha          : significance level (0.05 → 95% CI)
+    alpha          : significance level (0.05 -> 95% CI)
 
     Returns
     -------
@@ -171,13 +171,13 @@ def calibration_by_regime(
     """ECE, Brier, and class prevalence stratified by failure_freq regime.
 
     R9 mitigation: aggregate ECE is deflated by the under-failure and saturated
-    regimes where calibration is trivially good (predictions ≈ 0 vs labels ≈ 0,
-    or ≈ 1 vs ≈ 1).  Stratifying exposes calibration quality in the informative
+    regimes where calibration is trivially good (predictions ~= 0 vs labels ~= 0,
+    or ~= 1 vs ~= 1).  Stratifying exposes calibration quality in the informative
     regime where discrimination actually matters.
 
     Regime definitions (default thresholds 0.15 / 0.85):
       under_failure — failure_freq < lo   : no real failures; any near-zero pred is "calibrated"
-      informative   — lo ≤ ff ≤ hi       : model must genuinely discriminate
+      informative   — lo <= ff <= hi       : model must genuinely discriminate
       saturated     — failure_freq > hi  : near-certain failure; symmetric to under_failure
       aggregate     — all sequences       : reported for direct comparison with per-regime values
 
@@ -187,7 +187,7 @@ def calibration_by_regime(
                          both regime assignment key and calibration target
     y_prob             : model predicted probabilities (N,)
     regime_thresholds  : (lo, hi) boundaries; sequences at lo/hi go to informative
-    n_bootstrap        : bootstrap replicates for CI (0 → skip, returns NaN CIs)
+    n_bootstrap        : bootstrap replicates for CI (0 -> skip, returns NaN CIs)
     alpha              : CI significance level
     seed               : base RNG seed for bootstrap
 
@@ -271,7 +271,7 @@ def stratified_evaluation(
 
     Regime definitions (default 0.15 / 0.85 — stored in cfg['evaluation']):
       under_failure — failure_freq < lo   : few/no failures; near-0 predictions correct by default
-      informative   — lo ≤ ff ≤ hi       : genuine discrimination required
+      informative   — lo <= ff <= hi       : genuine discrimination required
       saturated     — failure_freq > hi   : near-certain failure; symmetric to under_failure
       aggregate     — all sequences       : for direct comparison with per-regime values
 
@@ -362,7 +362,7 @@ def stratified_evaluation(
     return rows
 
 
-# ── Classification metrics ───────────────────────────────────────────────────
+# -- Classification metrics ---------------------------------------------------
 
 def classification_metrics(
     y_true: np.ndarray,
@@ -476,7 +476,7 @@ def full_evaluation(
     return results
 
 
-# ── Layer 2 allocation metrics ───────────────────────────────────────────────
+# -- Layer 2 allocation metrics -----------------------------------------------
 
 def oligo_failure_rate(
     failure_flags: np.ndarray,
@@ -495,7 +495,7 @@ failure_reduction_rate = oligo_failure_rate
 
 
 def ofr_reduction(ofr_uniform: float, ofr_method: float) -> float:
-    """Relative OFR reduction = (OFR_uniform − OFR_method) / OFR_uniform.
+    """Relative OFR reduction = (OFR_uniform - OFR_method) / OFR_uniform.
 
     1.0  = method eliminated every failure that uniform would have had.
     0.0  = no improvement over uniform.
@@ -509,7 +509,7 @@ def ofr_reduction(ofr_uniform: float, ofr_method: float) -> float:
 def efficiency_ratio(ofr_model: float, ofr_oracle: float, ofr_uniform: float) -> float:
     """Efficiency ratio = fraction of theoretically available OFR gain captured.
 
-    efficiency = (OFR_uniform − OFR_model) / (OFR_uniform − OFR_oracle)
+    efficiency = (OFR_uniform - OFR_model) / (OFR_uniform - OFR_oracle)
 
     1.0 = model achieves oracle performance.
     0.0 = model offers no improvement over uniform allocation.
@@ -562,7 +562,7 @@ def allocation_statistics(
     }
 
 
-# ── Print helpers ────────────────────────────────────────────────────────────
+# -- Print helpers ------------------------------------------------------------
 
 def print_evaluation_table(results: Dict[str, Dict[str, float]]):
     """Print a formatted evaluation table for multiple models."""
