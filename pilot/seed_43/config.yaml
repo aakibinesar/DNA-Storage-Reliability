@@ -1,0 +1,116 @@
+allocation:
+  budget_tolerance: 1e-6
+  delta_values:
+  - 1
+  - 2
+  - 4
+  n_monte_carlo_runs: 30
+calibration:
+  method_lr: none
+  method_rf: isotonic
+  method_xgb: platt
+channel:
+  decay_loss_rate: 0.02
+  indel_rate: 0.001
+  ins_del_ratio: 0.5
+  n_initial_copies: 100
+  n_pcr_cycles: 10
+  pcr_bias: 0.05
+  pcr_fidelity: 0.9999
+  sequencing_sub_rate: 0.002
+  substitution_rates:
+  - 0.09
+  - 0.12
+  synthesis_del_rate: 0.0005
+  synthesis_ins_rate: 0.0005
+  synthesis_sub_rate: 0.001
+coverage_depths:
+- 5
+- 3
+evaluation:
+  auroc: true
+  brier_decompose: true
+  ece_n_bins: 10
+  pr_auc: true
+  regime_hi: 0.85
+  regime_lo: 0.15
+  reliability_diagram: true
+features:
+  entropy_window_size: 10
+  gc_window_sizes:
+  - 10
+  - 20
+  - 40
+  kmer_k:
+  - 2
+  - 3
+  max_homopolymer_tracked: 8
+  positional_bins: 10
+models:
+  logistic_regression:
+    C:
+    - 0.01
+    - 0.1
+    - 1.0
+    - 10.0
+    max_iter: 1000
+    solver: lbfgs
+  random_forest:
+    max_depth:
+    - 5
+    - 10
+    - null
+    min_samples_leaf:
+    - 1
+    - 5
+    - 10
+    n_estimators: 300
+  xgboost:
+    colsample_bytree: 0.8
+    early_stopping_rounds: 20
+    eval_metric: logloss
+    learning_rate:
+    - 0.05
+    - 0.1
+    - 0.2
+    max_depth:
+    - 3
+    - 4
+    - 5
+    - 6
+    n_estimators:
+    - 100
+    - 200
+    - 300
+    - 500
+    subsample: 0.8
+paths:
+  data_dir: C:\Users\LENOVO\Desktop\ML-DNA\dna-adaptive-redundancy\dna-adaptive-redundancy\pilot\seed_43\data/
+  datasets_dir: C:\Users\LENOVO\Desktop\ML-DNA\dna-adaptive-redundancy\dna-adaptive-redundancy\pilot\seed_43\data\datasets/
+  figures_dir: C:\Users\LENOVO\Desktop\ML-DNA\dna-adaptive-redundancy\dna-adaptive-redundancy\pilot\seed_43\results\figures/
+  models_dir: C:\Users\LENOVO\Desktop\ML-DNA\dna-adaptive-redundancy\dna-adaptive-redundancy\pilot\seed_43\models\saved/
+  results_dir: C:\Users\LENOVO\Desktop\ML-DNA\dna-adaptive-redundancy\dna-adaptive-redundancy\pilot\seed_43\results/
+  sequences_dir: C:\Users\LENOVO\Desktop\ML-DNA\dna-adaptive-redundancy\dna-adaptive-redundancy\pilot\seed_43\data\sequences/
+  splits_dir: C:\Users\LENOVO\Desktop\ML-DNA\dna-adaptive-redundancy\dna-adaptive-redundancy\pilot\seed_43\data\splits/
+random_seed: 43
+rs:
+  bases_per_byte: 4
+  l_rs_max: 16
+  l_rs_min: 4
+sequence:
+  data_bytes: 17
+  encoding_schemes:
+  - simple
+  - constrained
+  gc_max: 0.6
+  gc_min: 0.4
+  l_rs_default: 8
+  max_homopolymer: 3
+  n_sequences: 2000
+  primer_len: 0
+  seq_len_bases: 100
+splits:
+  stratify_bins: 5
+  test_frac: 0.15
+  train_frac: 0.7
+  val_frac: 0.15

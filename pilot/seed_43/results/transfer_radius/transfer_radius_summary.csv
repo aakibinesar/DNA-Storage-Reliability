@@ -1,0 +1,9 @@
+stratum,coverage,encoding,direction,ece_threshold,auroc_threshold,transfer_radius,first_failing_delta,n_tested,n_robust
+k3_constrained,3,constrained,down,2.000000,0.050000,0.000000,0.030000,1,0
+k3_constrained,3,constrained,up,2.000000,0.050000,0.000000,0.030000,1,0
+k3_simple,3,simple,down,2.000000,0.050000,0.000000,0.030000,1,0
+k3_simple,3,simple,up,2.000000,0.050000,0.000000,0.030000,1,0
+k5_constrained,5,constrained,down,2.000000,0.050000,0.000000,0.030000,1,0
+k5_constrained,5,constrained,up,2.000000,0.050000,0.000000,0.030000,1,0
+k5_simple,5,simple,down,2.000000,0.050000,0.000000,0.030000,1,0
+k5_simple,5,simple,up,2.000000,0.050000,0.000000,0.030000,1,0

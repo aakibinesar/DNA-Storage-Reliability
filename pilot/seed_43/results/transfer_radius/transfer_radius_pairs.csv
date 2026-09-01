@@ -1,0 +1,9 @@
+stratum,coverage,encoding,src_rate,tgt_rate,src_key,tgt_key,delta,direction,ece_threshold,auroc_threshold,auroc_indist,auroc_transfer,auroc_drop,ece_indist,ece_transfer,ece_ratio,brier_indist,brier_transfer,n_info_src,n_info_tgt,degenerate_src,degenerate_tgt,is_robust
+k5_simple,5,simple,0.090000,0.120000,sub09_k5_simple,sub12_k5_simple,0.030000,up,2.000000,0.050000,,,,,,,,,0,0,True,True,False
+k5_simple,5,simple,0.120000,0.090000,sub12_k5_simple,sub09_k5_simple,0.030000,down,2.000000,0.050000,,,,,,,,,0,0,True,True,False
+k5_constrained,5,constrained,0.090000,0.120000,sub09_k5_constrained,sub12_k5_constrained,0.030000,up,2.000000,0.050000,,,,,,,,,0,0,True,True,False
+k5_constrained,5,constrained,0.120000,0.090000,sub12_k5_constrained,sub09_k5_constrained,0.030000,down,2.000000,0.050000,,,,,,,,,0,0,True,True,False
+k3_simple,3,simple,0.090000,0.120000,sub09_k3_simple,sub12_k3_simple,0.030000,up,2.000000,0.050000,0.990000,1.000000,-0.010000,0.023163,0.168175,7.260556,0.006875,0.032900,191,114,False,False,False
+k3_simple,3,simple,0.120000,0.090000,sub12_k3_simple,sub09_k3_simple,0.030000,down,2.000000,0.050000,1.000000,0.995000,0.005000,0.040178,0.203423,5.063031,0.007124,0.047222,114,191,False,False,False
+k3_constrained,3,constrained,0.090000,0.120000,sub09_k3_constrained,sub12_k3_constrained,0.030000,up,2.000000,0.050000,1.000000,,,0.114026,,,0.016325,,33,0,False,True,False
+k3_constrained,3,constrained,0.120000,0.090000,sub12_k3_constrained,sub09_k3_constrained,0.030000,down,2.000000,0.050000,,1.000000,,,0.098300,,,0.015578,0,33,True,False,False
