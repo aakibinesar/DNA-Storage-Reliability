@@ -113,9 +113,24 @@ class CalibratedModel:
             if proba.ndim == 2:
                 if proba.shape[1] >= 2:
                     return proba[:, 1]
-                return np.zeros(proba.shape[0])
+                # Single-class classifier (e.g. a degenerate DummyClassifier):
+                # the one column is P(that class), not implicitly P(class 0).
+                classes = getattr(self.base_model, 'classes_', None)
+                if classes is None or len(classes) != 1:
+                    raise ValueError(
+                        "predict_proba returned one column but base_model.classes_ "
+                        "is unavailable or unexpected -- cannot infer which class "
+                        "the column represents."
+                    )
+                sole_class = classes[0]
+                if sole_class == 1:
+                    return np.ones(proba.shape[0])
+                elif sole_class == 0:
+                    return np.zeros(proba.shape[0])
+                raise ValueError(f"Unexpected single class value: {sole_class}")
             return proba
-        # Regressor path: XGBRegressor / RandomForestRegressor output [0, 1] directly
+        # Regressor path: XGBRegressor / RandomForestRegressor / DummyRegressor
+        # output the expected failure probability directly.
         return np.clip(self.base_model.predict(X), 0.0, 1.0)
 
 

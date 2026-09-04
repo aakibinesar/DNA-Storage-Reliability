@@ -97,6 +97,15 @@ def build_all_datasets(cfg: dict, verbose: bool = True):
             for seq in sequences:
                 f.write(seq + '\n')
 
+        # Canonical split: computed ONCE per encoding, from sequence identity
+        # (row position in `sequences`, which is fixed and shared across every
+        # substitution-rate/coverage combo for this encoding) and a fixed seed
+        # -- not from any per-condition failure_freq. Every config under this
+        # encoding reuses the exact same train/val/test membership, so a
+        # sequence can never be "seen" by one config's training set and
+        # "held out" in another's test set (fix for cross-config leakage).
+        canonical_split = _build_canonical_split(len(sequences), cfg['splits'], seed)
+
         for sub_rate in sub_rates:
             for coverage in coverages:
                 key = _config_key(sub_rate, coverage, encoding)
@@ -125,12 +134,11 @@ def build_all_datasets(cfg: dict, verbose: bool = True):
 
                 df.to_parquet(out_path, index=False)
 
-                # Generate and save stratified splits
-                _save_splits(
-                    df, key, failure_freq,
-                    cfg['splits'],
-                    cfg['paths']['splits_dir'],
-                    seed
+                # Save this config's copy of the encoding's canonical split
+                # (identical membership across every config sharing this
+                # encoding -- see _build_canonical_split above).
+                _save_canonical_split_copy(
+                    canonical_split, key, cfg['paths']['splits_dir']
                 )
 
                 fail_rate = (failure_freq >= 0.5).mean()
@@ -153,55 +161,65 @@ def build_all_datasets(cfg: dict, verbose: bool = True):
     return summary
 
 
-def _save_splits(
-    df,
-    key: str,
-    failure_freq: np.ndarray,
-    split_cfg: dict,
-    splits_dir: str,
-    seed: int,
+def _build_canonical_split(
+    n_sequences: int,
+    split_cfg:   dict,
+    seed:        int,
 ):
-    """Save train/val/test index splits using stratified binning."""
+    """Build one train/val/test index split, shared across every
+    substitution-rate/coverage config under a given encoding scheme.
+
+    Deliberately NOT stratified by failure_freq (or any other per-condition
+    quantity) -- stratifying by failure_freq is exactly what caused each
+    config to draw a different split from the same underlying sequences,
+    letting a sequence be "seen" in one config's training set and "held out"
+    in another's test set. A plain fixed-seed random split over sequence
+    identity (row position) has no such dependency, so it is identical no
+    matter which condition asks for it.
+
+    Returns
+    -------
+    pandas.DataFrame with columns 'index' (0..n_sequences-1) and 'split'
+    ('train' / 'val' / 'test').
+    """
     import pandas as pd
 
     train_f = split_cfg['train_frac']
     val_f   = split_cfg['val_frac']
-    n_bins  = split_cfg['stratify_bins']
 
-    N      = len(df)
-    bins   = np.linspace(0, 1, n_bins + 1)
-    bin_id = np.digitize(failure_freq, bins) - 1
-    bin_id = np.clip(bin_id, 0, n_bins - 1)
+    rng   = np.random.default_rng(seed)
+    order = rng.permutation(n_sequences)
+    n_train = max(1, int(n_sequences * train_f))
+    n_val   = max(1, int(n_sequences * val_f))
 
-    rng = np.random.default_rng(seed)
-    train_idx, val_idx, test_idx = [], [], []
+    train_idx = order[:n_train]
+    val_idx   = order[n_train:n_train + n_val]
+    test_idx  = order[n_train + n_val:]
 
-    for b in range(n_bins):
-        idx = np.where(bin_id == b)[0]
-        if len(idx) == 0:
-            continue
-        idx = rng.permutation(idx)
-        n_train = max(1, int(len(idx) * train_f))
-        n_val   = max(1, int(len(idx) * val_f))
-        train_idx.extend(idx[:n_train])
-        val_idx.extend(idx[n_train:n_train + n_val])
-        test_idx.extend(idx[n_train + n_val:])
-
-    # Verify: no overlap between splits
     assert len(set(train_idx) & set(test_idx)) == 0, "Train/test overlap!"
     assert len(set(val_idx)   & set(test_idx)) == 0, "Val/test overlap!"
+    assert len(set(train_idx) & set(val_idx))  == 0, "Train/val overlap!"
 
     splits = pd.DataFrame({
-        'index': list(range(N)),
-        'split': ['train'] * N,
+        'index': list(range(n_sequences)),
+        'split': ['train'] * n_sequences,
     })
     for idx in val_idx:
         splits.at[idx, 'split'] = 'val'
     for idx in test_idx:
         splits.at[idx, 'split'] = 'test'
+    return splits
 
+
+def _save_canonical_split_copy(canonical_split, key: str, splits_dir: str):
+    """Persist this config's copy of the encoding's canonical split.
+
+    Every config sharing an encoding writes an identical copy -- kept as a
+    per-config file so load_dataset() and every downstream loader can stay
+    unchanged, but the *content* is now guaranteed consistent across configs.
+    """
     splits_path = os.path.join(splits_dir, f'{key}_splits.parquet')
-    splits.to_parquet(splits_path, index=False)
+    canonical_split.to_parquet(splits_path, index=False)
 
 
 def load_dataset(

@@ -35,10 +35,15 @@ Seed partitioning (relative to base_seed from config):
   0        ..  n_runs-1  — dataset / label generation (label_generator.py)
   1000     ..  1000+n_runs-1  — main allocation evaluation (EVAL_SEED_OFFSET)
   2000+d*100 .. 2000+d*100+n_runs-1  — delta-sensitivity evaluation per delta d
-  3000     ..  3000+n_runs-1  — main-experiment marginal-benefit estimation (ORACLE_SEED_OFFSET)
+  3000     ..  3000+n_runs-1  — paired marginal-benefit/harm estimation
+                                  (ORACLE_SEED_OFFSET; one shared noise draw per
+                                  run evaluated at low/default/high thresholds --
+                                  benefit and harm no longer use separate ranges)
   3000+d*100 .. 3000+d*100+n_runs-1  — delta-sensitivity oracle estimation per delta d
-  5000     ..  5000+n_runs-1  — main-experiment marginal-harm estimation (R4 fix, ORACLE_HARM_SEED_OFFSET)
-  5000+d*100 .. 5000+d*100+n_runs-1  — delta-sensitivity harm estimation per delta d
+  9000     ..  9000+n_runs-1  — deployable tier_fraction selection on validation
+                                  data (select_tier_fraction_on_validation)
+  5000/5000+d*100 -- retired (was the independent marginal-harm range; harm
+                                  is now paired with benefit under 3000, see above)
 
 Usage (CLI):
     python allocation/experiment.py --config configs/experiment_config.yaml \\
@@ -170,6 +175,198 @@ def estimate_marginal_harm(
     return p_low - true_failure_freq   # positive = removing parity increases failures
 
 
+# -- Paired oracle estimation (fix: replaces 3 independent simulations) -------
+
+def estimate_paired_marginal_effects(
+    sequences:    List[str],
+    channel,
+    coverage:     int,
+    l_rs_default: int,
+    delta:        int,
+    n_runs:       int = 30,
+    base_seed:    int = 0,
+    seed_offset:  int = _ORACLE_SEED_OFFSET,
+    l_rs_min:     int = 4,
+    l_rs_max:     int = 16,
+):
+    """Paired marginal-benefit and marginal-harm estimate from ONE shared
+    channel-noise draw per run (fix for the noise-inflating bug where the
+    default/high/low parity outcomes were each estimated from independently
+    resimulated channel noise, on top of the three already being independent
+    of each other -- summing three independent noise sources into each
+    difference rather than one common-random-numbers draw evaluated at three
+    thresholds). Every run reuses the exact same synthesized byte-error count
+    per sequence for all three thresholds, so subtracting them cancels the
+    shared run-to-run noise instead of adding to it -- the same technique
+    _precompute_byte_errors already uses for the main evaluation loop,
+    applied here to the oracle's own estimation step.
+
+    Returns
+    -------
+    (marginal_benefit, marginal_harm) : each an array of shape (N,)
+        marginal_benefit = p(default) - p(default + delta)
+        marginal_harm    = p(default - delta) - p(default)
+    """
+    from consensus_voter import majority_vote_consensus, count_errors
+
+    N      = len(sequences)
+    l_high = min(l_rs_default + delta, l_rs_max)
+    l_low  = max(l_rs_default - delta, l_rs_min)
+
+    failures_default = np.zeros(N, dtype=np.float64)
+    failures_high    = np.zeros(N, dtype=np.float64)
+    failures_low     = np.zeros(N, dtype=np.float64)
+
+    for run_idx in range(n_runs):
+        run_channel = channel.clone(seed=base_seed + seed_offset + run_idx)
+        for i, seq in enumerate(sequences):
+            reads      = run_channel.simulate(seq, coverage)
+            consensus  = majority_vote_consensus(reads, len(seq))
+            stats      = count_errors(seq, consensus)
+            byte_errors = stats['byte_errors']
+            if byte_errors > l_rs_default // 2:
+                failures_default[i] += 1
+            if byte_errors > l_high // 2:
+                failures_high[i] += 1
+            if byte_errors > l_low // 2:
+                failures_low[i] += 1
+
+    p_default = failures_default / n_runs
+    p_high    = failures_high / n_runs
+    p_low     = failures_low / n_runs
+
+    marginal_benefit = p_default - p_high
+    marginal_harm    = p_low - p_default
+    return marginal_benefit, marginal_harm
+
+
+# -- Soft (kernel-smoothed) marginal effects for benefit-model training -------
+
+def estimate_soft_marginal_effects(
+    sequences:    List[str],
+    channel,
+    coverage:     int,
+    l_rs_default: int,
+    delta:        int,
+    n_runs:       int = 30,
+    base_seed:    int = 0,
+    seed_offset:  int = _ORACLE_SEED_OFFSET,
+    l_rs_min:     int = 4,
+    l_rs_max:     int = 16,
+    temperature:  float = 1.0,
+):
+    """Continuous, kernel-smoothed counterpart to estimate_paired_marginal_effects().
+
+    Motivation
+    ----------
+    The hard-threshold version only learns anything from a run whose byte-error
+    count lands EXACTLY at the boundary between two correction capacities (e.g.
+    at delta=2 with l_rs_default=8, only byte_errors==5 distinguishes "passes
+    at default+delta" from "fails at default"). Every other run -- comfortably
+    passing or comfortably failing either way -- contributes nothing to the
+    label. Diagnosed directly on sub20_k3_simple: 62% of sequences got an
+    exactly-zero benefit label at delta=2 purely because none of their 30 runs
+    happened to land on that single integer, not because their true benefit is
+    zero -- a label with almost no usable resolution for training a model.
+
+    Fix: replace the hard indicator 1(byte_errors > capacity) with a smoothed
+    sigmoid 1/(1+exp(-(byte_errors-capacity-0.5)/temperature)), which is ~1
+    well above the threshold, ~0 well below it, and varies smoothly in between.
+    A run with byte_errors two units below the boundary now contributes a
+    small-but-nonzero amount of information instead of exactly zero, so the
+    same 30 runs yield a far less discretized, better-conditioned label. This
+    is used ONLY for building training/validation labels for the benefit
+    model -- the oracle's actual allocation decisions and every reported OFR
+    figure keep using the true hard RS-decode pass/fail criterion, since that
+    is the real physical rule being modeled; the smoothing is a training-label
+    device, not a change to what "failure" means operationally.
+
+    Returns
+    -------
+    (marginal_benefit, marginal_harm) : each an array of shape (N,), continuous.
+    """
+    from consensus_voter import majority_vote_consensus, count_errors
+
+    N      = len(sequences)
+    l_high = min(l_rs_default + delta, l_rs_max)
+    l_low  = max(l_rs_default - delta, l_rs_min)
+    cap_default = l_rs_default // 2
+    cap_high    = l_high // 2
+    cap_low     = l_low // 2
+
+    def _soft_fail(byte_errors, capacity):
+        return 1.0 / (1.0 + np.exp(-(byte_errors - capacity - 0.5) / temperature))
+
+    soft_default = np.zeros(N, dtype=np.float64)
+    soft_high    = np.zeros(N, dtype=np.float64)
+    soft_low     = np.zeros(N, dtype=np.float64)
+
+    for run_idx in range(n_runs):
+        run_channel = channel.clone(seed=base_seed + seed_offset + run_idx)
+        for i, seq in enumerate(sequences):
+            reads       = run_channel.simulate(seq, coverage)
+            consensus   = majority_vote_consensus(reads, len(seq))
+            stats       = count_errors(seq, consensus)
+            byte_errors = stats['byte_errors']
+            soft_default[i] += _soft_fail(byte_errors, cap_default)
+            soft_high[i]    += _soft_fail(byte_errors, cap_high)
+            soft_low[i]     += _soft_fail(byte_errors, cap_low)
+
+    p_default = soft_default / n_runs
+    p_high    = soft_high / n_runs
+    p_low     = soft_low / n_runs
+
+    marginal_benefit = p_default - p_high
+    marginal_harm    = p_low - p_default
+    return marginal_benefit, marginal_harm
+
+
+# -- Deployable tier-fraction selection (fix: no oracle/test-label info) ------
+
+def select_tier_fraction_on_validation(
+    sequences_val:        List[str],
+    calibrated_risk_val:  np.ndarray,
+    channel,
+    coverage:             int,
+    l_rs_default:         int,
+    delta:                int,
+    l_rs_min:             int = 4,
+    l_rs_max:             int = 16,
+    tier_grid:            tuple = (0.05, 0.10, 0.20, 0.30),
+    n_runs:               int = 30,
+    base_seed:            int = 0,
+    seed_offset:          int = 9000,
+):
+    """Choose the reallocation budget (tier_fraction) that minimises OFR on
+    the validation set, using only the model's own calibrated risk ranking on
+    validation sequences -- no oracle-derived n_star, no test labels (fix:
+    the old deployable experiment borrowed the oracle's privileged budget
+    size instead of choosing its own). The choice is frozen here, before any
+    test-set evaluation happens.
+
+    Returns
+    -------
+    (best_tier_fraction, mean_ofr_by_candidate) -- the second value is a
+    dict for logging/diagnostics.
+    """
+    from mechanism import AllocationMechanism
+
+    alloc_mech = AllocationMechanism(l_rs_default, delta, l_rs_min, l_rs_max)
+    allocs = {tf: alloc_mech.allocate(calibrated_risk_val, tier_fraction=tf)
+              for tf in tier_grid}
+
+    ofr_sums = {tf: 0.0 for tf in tier_grid}
+    for run_idx in range(n_runs):
+        run_channel = channel.clone(seed=base_seed + seed_offset + run_idx)
+        byte_errors = _precompute_byte_errors(sequences_val, run_channel, coverage)
+        for tf in tier_grid:
+            ofr_sums[tf] += np.mean(byte_errors > (allocs[tf] // 2))
+
+    mean_ofr = {tf: ofr_sums[tf] / n_runs for tf in tier_grid}
+    best_tf  = min(mean_ofr, key=mean_ofr.get)
+    return best_tf, mean_ofr
+
+
 # -- Common random number helper (R3) -----------------------------------------
 
 def _precompute_byte_errors(
@@ -212,6 +409,7 @@ def run_allocation_experiment(
     l_rs_min:          int = 4,
     l_rs_max:          int = 16,
     verbose:           bool = False,
+    tier_fraction_deployable: float = None,
 ) -> Dict[str, np.ndarray]:
     """Run all four allocation conditions across M independent simulator runs.
 
@@ -242,16 +440,34 @@ def run_allocation_experiment(
              evaluated alongside the ML conditions so the paper can claim
              ML beats rule-based baselines.
 
+    Fairness fix: the oracle-sized conditions above (xgb_cal, xgb_raw, and
+    every rule-based baseline) all share the oracle's own n_star/N budget --
+    useful for isolating *ranking quality* from *budget size*, but it means
+    the "deployable" model is secretly told how many sequences to reallocate
+    by a privileged, test-label-derived oracle. When tier_fraction_deployable
+    is provided (chosen beforehand on validation data only, see
+    select_tier_fraction_on_validation()), this function additionally
+    computes a genuinely fair "*_deployable" condition for xgb_cal and every
+    baseline, sharing the SAME validation-chosen budget across all of them
+    with no oracle or test-label information anywhere in the choice. The
+    oracle-sized conditions are kept as-is and should be read as a diagnostic
+    ranking-quality comparison, not the deployable claim.
+
     Parameters
     ----------
-    marginal_benefits : array (N,) — pre-computed from estimate_marginal_benefits().
-    marginal_harm      : array (N,) — pre-computed from estimate_marginal_harm().
+    marginal_benefits : array (N,) — pre-computed from estimate_paired_marginal_effects().
+    marginal_harm      : array (N,) — pre-computed from estimate_paired_marginal_effects().
+    tier_fraction_deployable : optional fixed budget fraction, chosen on
+        validation data only, for the fair "*_deployable" conditions.
 
     Returns
     -------
     dict with keys 'ofr_uniform', 'ofr_oracle', 'ofr_xgb_cal', 'ofr_xgb_raw',
-    'ofr_gc_dev', 'ofr_hp', 'ofr_composite', 'ofr_random',
-    each an array of shape (n_runs,).
+    'ofr_gc_dev', 'ofr_hp', 'ofr_composite', 'ofr_random' (all diagnostic,
+    oracle-sized budget), plus, when tier_fraction_deployable is given,
+    'ofr_xgb_cal_deployable', 'ofr_gc_dev_deployable', 'ofr_hp_deployable',
+    'ofr_composite_deployable', 'ofr_random_deployable' (fair, validation-
+    sized budget) -- each an array of shape (n_runs,).
     """
     from mechanism import AllocationMechanism, uniform_allocation, oracle_allocation_greedy_swap
     from baselines import get_baseline_allocations
@@ -276,6 +492,18 @@ def run_allocation_experiment(
         random_seed=base_seed + 8000, tier_fraction=tier_fraction,
     )
 
+    # Fairness fix: fair, validation-sized budget conditions (no oracle/test info)
+    have_deployable = tier_fraction_deployable is not None
+    if have_deployable:
+        l_rs_xgb_cal_dep = alloc.allocate(calibrated_risk, tier_fraction=tier_fraction_deployable)
+        baseline_allocs_dep = get_baseline_allocations(
+            sequences, l_rs_default, delta, l_rs_min, l_rs_max,
+            random_seed=base_seed + 8100, tier_fraction=tier_fraction_deployable,
+        )
+        if verbose:
+            print(f"  [allocation] Deployable budget (validation-chosen): "
+                  f"{tier_fraction_deployable:.1%} promoted/demoted")
+
     ofr_uniform   = np.zeros(n_runs)
     ofr_oracle    = np.zeros(n_runs)
     ofr_xgb_cal   = np.zeros(n_runs)
@@ -284,9 +512,15 @@ def run_allocation_experiment(
     ofr_hp        = np.zeros(n_runs)
     ofr_composite = np.zeros(n_runs)
     ofr_random    = np.zeros(n_runs)
+    if have_deployable:
+        ofr_xgb_cal_dep   = np.zeros(n_runs)
+        ofr_gc_dev_dep    = np.zeros(n_runs)
+        ofr_hp_dep        = np.zeros(n_runs)
+        ofr_composite_dep = np.zeros(n_runs)
+        ofr_random_dep    = np.zeros(n_runs)
 
     for run_idx in range(n_runs):
-        # One channel clone -> one byte-error array shared by all eight conditions (R3)
+        # One channel clone -> one byte-error array shared by all conditions (R3)
         run_channel = channel.clone(seed=base_seed + _EVAL_SEED_OFFSET + run_idx)
         byte_errors = _precompute_byte_errors(sequences, run_channel, coverage)
 
@@ -299,6 +533,13 @@ def run_allocation_experiment(
         ofr_composite[run_idx] = np.mean(byte_errors > (baseline_allocs['composite'] // 2))
         ofr_random[run_idx]    = np.mean(byte_errors > (baseline_allocs['random']    // 2))
 
+        if have_deployable:
+            ofr_xgb_cal_dep[run_idx]   = np.mean(byte_errors > (l_rs_xgb_cal_dep              // 2))
+            ofr_gc_dev_dep[run_idx]    = np.mean(byte_errors > (baseline_allocs_dep['gc_dev']    // 2))
+            ofr_hp_dep[run_idx]        = np.mean(byte_errors > (baseline_allocs_dep['hp']        // 2))
+            ofr_composite_dep[run_idx] = np.mean(byte_errors > (baseline_allocs_dep['composite'] // 2))
+            ofr_random_dep[run_idx]    = np.mean(byte_errors > (baseline_allocs_dep['random']    // 2))
+
         if verbose and (run_idx + 1) % 5 == 0:
             print(f"  [allocation] Run {run_idx+1}/{n_runs} | "
                   f"uniform={ofr_uniform[:run_idx+1].mean():.4f} | "
@@ -306,7 +547,7 @@ def run_allocation_experiment(
                   f"composite={ofr_composite[:run_idx+1].mean():.4f} | "
                   f"xgb_cal={ofr_xgb_cal[:run_idx+1].mean():.4f}")
 
-    return {
+    results = {
         'ofr_uniform'   : ofr_uniform,
         'ofr_oracle'    : ofr_oracle,
         'ofr_xgb_cal'   : ofr_xgb_cal,
@@ -316,6 +557,17 @@ def run_allocation_experiment(
         'ofr_composite' : ofr_composite,
         'ofr_random'    : ofr_random,
     }
+    if have_deployable:
+        results.update({
+            'ofr_xgb_cal_deployable'  : ofr_xgb_cal_dep,
+            'ofr_gc_dev_deployable'   : ofr_gc_dev_dep,
+            'ofr_hp_deployable'       : ofr_hp_dep,
+            'ofr_composite_deployable': ofr_composite_dep,
+            'ofr_random_deployable'   : ofr_random_dep,
+            'tier_fraction_deployable': np.array([tier_fraction_deployable]),
+            'tier_fraction_oracle'    : np.array([tier_fraction]),
+        })
+    return results
 
 
 # -- Delta-sensitivity sweep ---------------------------------------------------
@@ -470,8 +722,9 @@ def main():
     models = load_models(args.models_dir, args.key)
 
     # Calibrated risk: CalibratedModel.predict_proba returns [0,1] scores
-    xgb_cal         = models.get('xgboost')
-    calibrated_risk = xgb_cal.predict_proba(X_te) if xgb_cal else np.zeros(len(y_te))
+    xgb_cal             = models.get('xgboost')
+    calibrated_risk     = xgb_cal.predict_proba(X_te)  if xgb_cal else np.zeros(len(y_te))
+    calibrated_risk_val = xgb_cal.predict_proba(X_val) if xgb_cal else np.zeros(len(y_val))
 
     # Raw (uncalibrated) risk: regressor .predict() after R1 fix (no predict_proba)
     if xgb_cal:
@@ -487,33 +740,36 @@ def main():
     splits    = pd.read_parquet(
         os.path.join(cfg['paths']['splits_dir'], f'{args.key}_splits.parquet')
     )
-    test_idx  = splits[splits['split'] == 'test']['index'].values
-    sequences = df['dna_sequence'].values[test_idx].tolist()
+    test_idx      = splits[splits['split'] == 'test']['index'].values
+    val_idx       = splits[splits['split'] == 'val']['index'].values
+    sequences     = df['dna_sequence'].values[test_idx].tolist()
+    sequences_val = df['dna_sequence'].values[val_idx].tolist()
 
     l_rs_default = cfg['sequence']['l_rs_default']
     l_rs_min     = cfg['rs']['l_rs_min']
     l_rs_max     = cfg['rs']['l_rs_max']
 
-    # R2: compute marginal benefits before running the experiment
-    print(f"[allocation] Estimating marginal benefits (oracle) ...")
-    marginal_benefits = estimate_marginal_benefits(
-        sequences, y_te, channel, coverage,
+    # Paired oracle estimation (fix: one shared noise draw per run, evaluated
+    # at low/default/high thresholds, instead of three independent simulations)
+    print(f"[allocation] Estimating paired marginal benefit/harm (oracle) ...")
+    marginal_benefits, marginal_harm = estimate_paired_marginal_effects(
+        sequences, channel, coverage,
         l_rs_default, args.delta, n_runs,
         base_seed=base_seed,
-        oracle_seed_offset=_ORACLE_SEED_OFFSET,
-        l_rs_max=l_rs_max,
+        seed_offset=_ORACLE_SEED_OFFSET,
+        l_rs_min=l_rs_min, l_rs_max=l_rs_max,
     )
 
-    # R4: compute marginal harm (symmetric to marginal benefits) so the oracle
-    # can tell "safe to demote" apart from "already failing, don't demote"
-    print(f"[allocation] Estimating marginal harm (oracle) ...")
-    marginal_harm = estimate_marginal_harm(
-        sequences, y_te, channel, coverage,
-        l_rs_default, args.delta, n_runs,
-        base_seed=base_seed,
-        harm_seed_offset=_ORACLE_HARM_SEED_OFFSET,
-        l_rs_min=l_rs_min,
+    # Fairness fix: choose the deployable budget on validation data only,
+    # before touching test data or the oracle's own privileged budget.
+    print(f"[allocation] Selecting deployable tier_fraction on validation data ...")
+    tier_fraction_deployable, val_ofr_by_tf = select_tier_fraction_on_validation(
+        sequences_val, calibrated_risk_val, channel, coverage,
+        l_rs_default, args.delta, l_rs_min, l_rs_max,
+        n_runs=n_runs, base_seed=base_seed,
     )
+    print(f"  [allocation] Validation OFR by candidate tier_fraction: "
+          f"{ {k: round(v, 4) for k, v in val_ofr_by_tf.items()} }")
 
     os.makedirs(args.out, exist_ok=True)
 
@@ -523,6 +779,7 @@ def main():
         n_runs=n_runs, base_seed=base_seed,
         l_rs_min=l_rs_min, l_rs_max=l_rs_max,
         verbose=True,
+        tier_fraction_deployable=tier_fraction_deployable,
     )
 
     out_path = os.path.join(args.out, f'{args.key}_delta{args.delta}')
