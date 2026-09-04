@@ -1,2 +1,2 @@
 ece_aggregate,ece_informative,ece_informative_ci_lo,ece_informative_ci_hi,delta_ece,brier_aggregate,brier_informative,brier_informative_ci_lo,brier_informative_ci_hi,delta_brier,regime_lo,regime_hi,n_bootstrap,alpha
-0.004234,0.068021,0.030016,0.112065,0.063786,0.001412,0.011740,0.006555,0.017115,0.010328,0.150000,0.850000,500,0.050000
+0.009783,0.078602,0.049986,0.130010,0.068818,0.001740,0.014106,0.007230,0.021499,0.012366,0.150000,0.850000,500,0.050000

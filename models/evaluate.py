@@ -586,12 +586,18 @@ def go_no_go_check(
 ) -> Tuple[bool, str]:
     """Week 4 go/no-go gate: ECE < 0.05 AND Brier below no-skill baseline.
 
-    No-skill baseline Brier = base_rate * (1 - base_rate).
+    y_true may be binary (0/1) or a continuous empirical failure frequency
+    in [0, 1] -- both are supported by the same formula. The no-skill
+    baseline is the Brier/MSE of always predicting the constant mean of
+    y_true (a "predict-the-base-rate" regressor), i.e. Var(y_true). For a
+    genuinely binary y_true this is exactly base_rate * (1 - base_rate),
+    the classic no-skill formula; for a continuous y_true it is the
+    correct generalisation (fix: the old base*(1-base) formula silently
+    assumed a binary target even when scoring a continuous regressor).
     """
     ece    = expected_calibration_error(y_true, y_prob, n_bins)
     brier  = brier_score_decomposed(y_true, y_prob)['brier']
-    base   = float(np.asarray(y_true).mean())
-    no_skill_brier = base * (1 - base)
+    no_skill_brier = float(np.var(np.asarray(y_true, dtype=float)))
 
     ece_pass   = ece   < 0.05
     brier_pass = brier < no_skill_brier

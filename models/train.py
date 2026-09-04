@@ -75,24 +75,56 @@ def train_all_models(
         print(f"  Class balance: pos_frac={pos_frac:.4f} "
               f"({'IMBALANCED' if pos_frac < 0.05 or pos_frac > 0.95 else 'OK'})")
 
-    # Single-class guard: classifiers require at least 2 classes
-    if len(np.unique(y_train_bin)) < 2:
+    # Continuous-target degeneracy guard for XGBoost/RF (fix for the bug where
+    # a crude binary >=0.5 cutoff was used here instead): XGBoost and RF are
+    # regressors on continuous failure_freq, so they should only fall back to
+    # a trivial constant predictor when failure_freq itself has essentially no
+    # variation -- not whenever its binarised >=0.5 version happens to be
+    # single-class. A config can have every sequence below 0.5 (or above it)
+    # while still having plenty of learnable continuous variation.
+    y_range = float(np.max(y_train) - np.min(y_train))
+    xgb_rf_degenerate = y_range < 1e-6
+
+    # Single-class guard for Logistic Regression only -- it is the one model
+    # here that genuinely requires at least two discrete classes to fit.
+    lr_degenerate = len(np.unique(y_train_bin)) < 2
+
+    if xgb_rf_degenerate:
+        from sklearn.dummy import DummyRegressor
+        if verbose:
+            print(f"  WARNING: failure_freq has no variation (range={y_range:.2e}) — "
+                  f"using DummyRegressor (constant) for XGBoost/RF.")
+        const_value = float(np.mean(y_train))
+        dummy_xgb = CalibratedModel(DummyRegressor(strategy='constant', constant=const_value).fit(X_train, y_train),
+                                     method='none')
+        dummy_rf  = CalibratedModel(DummyRegressor(strategy='constant', constant=const_value).fit(X_train, y_train),
+                                     method='none')
+        dummy_xgb.fit(X_cal, y_cal)
+        dummy_rf.fit(X_cal, y_cal)
+        xgb_result, rf_result = dummy_xgb, dummy_rf
+    else:
+        xgb_result, rf_result = None, None  # trained normally below
+
+    if lr_degenerate:
         from sklearn.dummy import DummyClassifier
         from sklearn.preprocessing import StandardScaler
         if verbose:
             label = 'all-negative (no failures)' if y_train_bin[0] == 0 else 'all-positive'
-            print(f"  WARNING: single-class labels ({label}) — using DummyClassifier for all models.")
-        dummy = DummyClassifier(strategy='most_frequent')
-        dummy.fit(X_train, y_train_bin)
-        scaler = StandardScaler()
-        scaler.fit(X_train)
-        dummy_cal = CalibratedModel(dummy, method='none')
-        dummy_cal.fit(X_cal, y_cal)
+            print(f"  WARNING: single-class binary labels ({label}) — using DummyClassifier for Logistic Regression.")
+        lr_dummy = DummyClassifier(strategy='most_frequent')
+        lr_dummy.fit(X_train, y_train_bin)
+        lr_scaler = StandardScaler()
+        lr_scaler.fit(X_train)
+        lr_result = lr_dummy
+    else:
+        lr_result, lr_scaler = None, None  # trained normally below
+
+    if xgb_rf_degenerate and lr_degenerate:
         return {
-            'xgboost': dummy_cal,
-            'random_forest': dummy_cal,
-            'logistic_regression': dummy,
-            'logistic_scaler': scaler,
+            'xgboost': xgb_result,
+            'random_forest': rf_result,
+            'logistic_regression': lr_result,
+            'logistic_scaler': lr_scaler,
         }
 
     # Sample weights for LR only (imbalanced binary classification)
@@ -106,48 +138,59 @@ def train_all_models(
 
     results = {}
 
-    # -- 1. XGBoost — regressor on continuous failure_freq (R1 fix) -----------
-    if verbose:
-        print("  Training XGBoost ...")
-    xgb_model = _train_xgboost(
-        X_train, y_train, X_val, y_val,
-        cfg['models']['xgboost'], seed, weights=None
-    )
-    xgb_calibrated = CalibratedModel(xgb_model, method='platt', seed=seed)
-    xgb_calibrated.fit(X_cal, y_cal)   # R6 fix: independent calibration set
-    results['xgboost'] = xgb_calibrated
-    if verbose:
-        print(f"    XGBoost fitted")
+    # -- 1 & 2. XGBoost / Random Forest — regressors on continuous failure_freq
+    if xgb_result is not None:
+        results['xgboost'] = xgb_result
+        results['random_forest'] = rf_result
+        if verbose:
+            print("  XGBoost/RF: using constant DummyRegressor (degenerate target)")
+    else:
+        if verbose:
+            print("  Training XGBoost ...")
+        xgb_model = _train_xgboost(
+            X_train, y_train, X_val, y_val,
+            cfg['models']['xgboost'], seed, weights=None
+        )
+        xgb_calibrated = CalibratedModel(xgb_model, method='platt', seed=seed)
+        xgb_calibrated.fit(X_cal, y_cal)   # R6 fix: independent calibration set
+        results['xgboost'] = xgb_calibrated
+        if verbose:
+            print(f"    XGBoost fitted")
 
-    # -- 2. Random Forest — regressor on continuous failure_freq (R1 fix) -----
-    if verbose:
-        print("  Training Random Forest ...")
-    rf_model = _train_random_forest(
-        X_train, y_train, X_val, y_val,
-        cfg['models']['random_forest'], seed, weights=None
-    )
-    rf_calibrated = CalibratedModel(rf_model, method='isotonic', seed=seed)
-    rf_calibrated.fit(X_cal, y_cal)    # R6 fix: independent calibration set
-    results['random_forest'] = rf_calibrated
-    if verbose:
-        print(f"    Random Forest fitted")
+        if verbose:
+            print("  Training Random Forest ...")
+        rf_model = _train_random_forest(
+            X_train, y_train, X_val, y_val,
+            cfg['models']['random_forest'], seed, weights=None
+        )
+        rf_calibrated = CalibratedModel(rf_model, method='isotonic', seed=seed)
+        rf_calibrated.fit(X_cal, y_cal)    # R6 fix: independent calibration set
+        results['random_forest'] = rf_calibrated
+        if verbose:
+            print(f"    Random Forest fitted")
 
     # -- 3. Logistic Regression — binary majority-fail discriminator -----------
     # LR uses binarised labels. Its output is P(majority_fail), not the expected
     # per-run failure probability. Treated as a risk-ranking baseline.
-    if verbose:
-        print("  Training Logistic Regression ...")
-    scaler   = StandardScaler()
-    X_tr_s   = scaler.fit_transform(X_train)
-    X_val_s  = scaler.transform(X_val)
-    lr_model = _train_logistic_regression(
-        X_tr_s, y_train_bin, X_val_s, y_val_bin,
-        cfg['models']['logistic_regression'], seed, lr_sample_weights
-    )
-    results['logistic_regression'] = lr_model
-    results['logistic_scaler']     = scaler
-    if verbose:
-        print(f"    Logistic Regression fitted")
+    if lr_result is not None:
+        results['logistic_regression'] = lr_result
+        results['logistic_scaler']     = lr_scaler
+        if verbose:
+            print("  Logistic Regression: using DummyClassifier (single-class binary label)")
+    else:
+        if verbose:
+            print("  Training Logistic Regression ...")
+        scaler   = StandardScaler()
+        X_tr_s   = scaler.fit_transform(X_train)
+        X_val_s  = scaler.transform(X_val)
+        lr_model = _train_logistic_regression(
+            X_tr_s, y_train_bin, X_val_s, y_val_bin,
+            cfg['models']['logistic_regression'], seed, lr_sample_weights
+        )
+        results['logistic_regression'] = lr_model
+        results['logistic_scaler']     = scaler
+        if verbose:
+            print(f"    Logistic Regression fitted")
 
     return results
 

@@ -18,6 +18,7 @@ import argparse
 import os
 import sys
 
+import numpy as np
 import yaml
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
@@ -66,12 +67,15 @@ def main():
         print(f"[gate_check] ERROR: no calibrated xgboost model found for {args.key}")
         sys.exit(2)
 
+    # XGB/RF gate: scored against the CONTINUOUS failure_freq the model was
+    # actually trained to predict -- not a binarised majority-fail label
+    # (fix: the old version scored a continuous regressor against a coarsened
+    # binary target, comparing it against the wrong quantity).
     y_prob = xgb_cal.predict_proba(X_te)
-    y_bin  = (y_te >= 0.5).astype(int)
-
-    passed, msg = go_no_go_check(y_bin, y_prob)
+    passed, msg = go_no_go_check(y_te, y_prob)
 
     print(f"\n[gate_check] {args.key}  (n_test={len(y_te)})")
+    print("  -- XGBoost gate (continuous failure_freq target) --")
     print(msg)
     print(f"\n[gate_check] RESULT: {'PASS' if passed else 'FAIL'}")
 
@@ -82,6 +86,25 @@ def main():
             "  2. Feature variance — check XGBoost feature_importances_ for dead features.\n"
             "  3. Label quality — inspect high-predicted sequences against raw simulator output."
         )
+
+    # Separate, clearly-labeled majority-failure classification gate for
+    # Logistic Regression, which is trained as a binary discriminator (not a
+    # continuous-probability estimator) and should be judged against the
+    # binary target it actually uses.
+    lr_model  = models.get('logistic_regression')
+    lr_scaler = models.get('logistic_scaler')
+    if lr_model is not None and lr_scaler is not None:
+        y_bin = (y_te >= 0.5).astype(int)
+        try:
+            lr_prob = lr_model.predict_proba(lr_scaler.transform(X_te))[:, 1]
+        except (IndexError, ValueError):
+            # Degenerate single-class DummyClassifier: one column only.
+            classes = getattr(lr_model, 'classes_', [None])
+            lr_prob = np.full(len(y_bin), 1.0 if classes[0] == 1 else 0.0)
+        lr_passed, lr_msg = go_no_go_check(y_bin, lr_prob)
+        print("\n  -- Logistic Regression gate (majority-failure binary target) --")
+        print(lr_msg)
+        print(f"  RESULT: {'PASS' if lr_passed else 'FAIL'}")
 
     sys.exit(0 if passed else 1)
 

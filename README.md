@@ -39,10 +39,10 @@ Across the 28 configurations, three distinct regimes emerge:
 | Regime | Configs | Failure Rate | ML useful? |
 |--------|---------|-------------|------------|
 | Under-failure | sub01–05 K=3, K=5 below 15% sub | < 2% | No — uniform allocation sufficient |
-| **Sweet spot** | **sub09–15 K=3, sub15–20 K=5** | **5–90%** | **Yes — informative-regime AUROC 0.57–1.00** |
+| **Sweet spot** | **sub09–15 K=3, sub15–20 K=5** | **5–90%** | **Yes — informative-regime AUROC 0.54–1.00** |
 | Over-failure | sub18–20 K=3 | ~100% | No — max parity still insufficient |
 
-Only 17 of 28 configs have enough informative-regime sequences (n≥20) to support a reliable AUROC estimate; the rest are too close to under- or over-failure to say much beyond "not much room for ML here." See `results/regime_evaluation/` for the full per-config, per-regime breakdown.
+12 of 28 configs have enough informative-regime sequences (n≥20) in their test set to support a reliable AUROC estimate. This count uses a leak-free canonical train/val/test split shared across every substitution rate and coverage depth for a given encoding scheme (see Fixed Issues below) — a genuinely unbiased split, unlike an earlier version that stratified independently per condition, which incidentally guaranteed better informative-regime representation in every test set but let the same physical sequence appear in one config's training data and another's "held-out" test data. The lower count is the honest cost of removing that leakage, not a regression in model quality. See `results/regime_evaluation/` for the full per-config, per-regime breakdown.
 
 ---
 
@@ -52,15 +52,17 @@ Only 17 of 28 configs have enough informative-regime sequences (n≥20) to suppo
 ├── src/
 │   ├── sequence_generator.py     # Synthetic oligo generation + channel simulation
 │   ├── feature_extractor.py      # ~80 sequence features per oligo
-│   └── dataset_assembler.py      # Train/val/test splits (70/15/15)
+│   └── dataset_assembler.py      # Canonical (leak-free) train/val/test splits, one per encoding
 ├── models/
 │   ├── train.py                  # XGBoost / RF / LR training with grid search
+│   ├── train_benefit_model.py    # Part B: benefit-aware model (predicts marginal benefit, not failure risk)
 │   ├── calibrate.py              # Platt scaling, isotonic regression, temperature scaling
 │   └── evaluate.py               # ECE, Brier score, PR-AUC, AUROC
 ├── allocation/
 │   ├── mechanism.py              # Budget-neutral parity reallocation + noise-aware oracle
 │   ├── baselines.py              # Rule-based allocation baselines (GC-dev, HP, composite, random)
-│   └── experiment.py             # Allocation experiments (XGBoost vs. Oracle vs. Uniform vs. baselines)
+│   ├── experiment.py             # Allocation experiments; paired oracle estimation; deployable tier selection
+│   └── significance.py           # Paired Wilcoxon significance tests with BH-FDR correction, all 84 combos
 ├── analysis/
 │   ├── ablation.py               # Feature group ablation analysis
 │   ├── threshold_sensitivity.py  # Decision-threshold sweep, near-threshold label noise
@@ -71,6 +73,8 @@ Only 17 of 28 configs have enough informative-regime sequences (n≥20) to suppo
 │   ├── shap_stability.py         # Bootstrap SHAP feature-importance stability
 │   ├── encoding_confound.py      # Deconfounded simple-vs-constrained encoding comparison
 │   ├── channel_ablation.py       # Model robustness under ablated channel-noise variants
+│   ├── risk_marginal_benefit_correlation.py  # Diagnostic: does model risk track true marginal benefit?
+│   ├── validate_benefit_model.py # Part B: benefit model vs. failure-risk model, scored on true test-set benefit
 │   └── figures.py                # Paper figures (Figs 2–5, S1, S4)
 ├── configs/
 │   └── experiment_config.yaml    # All hyperparameters and grid settings
@@ -121,7 +125,7 @@ python run_pipeline.py --status
 |-------|-------------|
 | `datasets` | Generate sequences, simulate channel, extract features |
 | `train` | Train and calibrate all models across 28 configs |
-| `gate_check` | Calibration sanity check on the held-out gate config (informational — currently fails; see Known Limitations) |
+| `gate_check` | Calibration sanity check on the held-out gate config (informational; scores the model against the same continuous target it was trained on) |
 | `threshold_sensitivity` | Wilson-interval label-noise sweep across decision thresholds |
 | `calibration_regimes` | Regime-stratified ECE/Brier with bootstrap 95% CIs |
 | `regime_evaluation` | Full Layer 1 metric suite (AUROC/F1/ECE/Brier), stratified by regime |
@@ -165,15 +169,38 @@ results/
 
 ### Allocation Results
 
-Across all 84 configs (28 keys × 3 delta values), comparing the oracle allocation (privileged, marginal-benefit/harm-ranked, budget-neutral) against plain uniform allocation:
+Every allocation experiment reports **two distinct comparisons**, because they answer different questions:
 
-| Outcome | Configs |
-|---|---|
-| Oracle beats or ties uniform | 47 / 84 |
-| Oracle within 0.5 percentage points of uniform | 27 / 84 |
-| Oracle shows a small residual loss (≤ ~1pp) | 10 / 84 |
+- **Diagnostic (oracle-sized budget)**: the model and every rule-based baseline are given the *oracle's own* reallocation budget size, isolating ranking quality from budget size. Useful for research, but not a fair picture of real deployment — the oracle's budget comes from privileged marginal-benefit/harm information a real system doesn't have.
+- **Deployable (validation-sized budget)**: the model chooses its own reallocation budget by testing a small grid (5%/10%/20%/30%) on validation data only and freezing the winner before touching test data — no oracle or test-label information anywhere in the choice. Every rule-based baseline gets the same validation-chosen budget for a fair comparison. This is the number that reflects what you'd actually get by deploying the model.
 
-The 10 residual-loss configs are entirely at delta=1 (zero at delta=2 or delta=4) — the smallest parity-reallocation step tested, where the true effect size is closest to the noise floor of the 30-run Monte Carlo estimate. This is a known, bounded, and reported limitation, not a hidden failure — see `allocation/mechanism.py`'s `oracle_allocation_greedy_swap` docstring for the full derivation.
+Across all 84 configs (28 keys × 3 delta values):
+
+| Comparison | Beats/ties uniform | Small loss (≤0.5pp) | Meaningful loss |
+|---|---|---|---|
+| **Oracle** (diagnostic, marginal-benefit/harm-ranked) | 79 / 84 | 5 / 84 | 0 / 84 |
+| **Deployed model** (fair, validation-sized budget) | 34 / 84 | 28 / 84 | 22 / 84 |
+
+The oracle result reflects a paired Monte Carlo estimation design: the low/default/high-parity outcomes for a given run share one simulated channel-noise draw rather than three independently resimulated ones, which substantially reduces estimation noise for the same 30-run budget (see `allocation/experiment.py`'s `estimate_paired_marginal_effects`). Under that cleaner estimate, the theoretical ceiling is essentially always at least as good as uniform.
+
+The deployed-model result is the more important number for anyone actually using this system, and it's honest about a real gap: the model reliably wins in about 40% of configs, is roughly break-even in another third, and meaningfully underperforms uniform in about a quarter. **Root cause (confirmed directly, see `analysis/risk_marginal_benefit_correlation.py`): the model is trained to predict raw failure probability, not marginal benefit of added parity, and these are essentially uncorrelated on average (mean Spearman ≈ -0.005, median ≈ -0.037 across 28 configs) even though the model discriminates raw failure risk well.** A failure-risk classifier is the wrong tool for a reallocation decision — see Benefit-Aware Model below for the direct fix, which closes most of this gap.
+
+### Benefit-Aware Model (Part B)
+
+Rather than only diagnosing the target-mismatch problem above, the project includes a second model trained directly on the quantity the allocation decision needs: marginal benefit of added parity, not raw failure risk (`models/train_benefit_model.py`).
+
+**First attempt used the same hard pass/fail threshold-crossing label the oracle uses internally, and it didn't help.** Diagnosis: at a representative delta, a sequence only registers *any* measurable benefit if one of its 30 simulated runs lands on a single specific byte-error-count integer (the exact boundary between two correction capacities) — for `sub20_k3_simple`, **62% of sequences got an exactly-zero label** purely from that narrow window rarely being hit in 30 samples, not because their true benefit was actually zero. A label that coarse gives a model almost nothing learnable to fit.
+
+**Fix: a kernel-smoothed (sigmoid) label instead of a hard threshold**, replacing `1(byte_errors > capacity)` with a smooth function that extracts partial information from every simulated run based on how close it is to the boundary, not just runs landing exactly on it. This is a training-label device only — the oracle's actual allocation decisions and every reported OFR figure still use the true hard RS-decode pass/fail rule, since that's the real physical criterion. On `sub20_k3_simple` this eliminated the zero-inflation entirely (62% → 0% exactly-zero) and reversed the model's relationship with true benefit from strongly backwards to strongly correct (Spearman vs. true benefit: -0.36 → +0.38; vs. a comparably clean ground truth: -0.67 → +0.87).
+
+**Full 28-config validation**, benefit model vs. the old failure-risk model, both scored against true test-set marginal benefit (`analysis/validate_benefit_model.py`):
+
+| | Mean Spearman | Median Spearman |
+|---|---|---|
+| Old failure-risk model | -0.005 | -0.037 |
+| **New benefit-aware model** | **+0.132** | **+0.112** |
+
+The benefit model improves on 17 of 28 configs, and the improvement is concentrated exactly where it matters: the configs where the old model was most badly *backwards* (`sub20_k3_simple`: -0.36 → +0.38; `sub05_k3_simple`: -0.27 → +0.31; `sub01_k3_simple`: -0.20 → +0.30) see the largest gains, while configs where the old model was already reasonable see only small, bounded declines (worst case -0.08). Three `sub01` configs that had no usable signal at all under the old model (constant predictions) now get valid, small-positive correlations. Not yet wired into the actual allocation OFR experiments — that's the natural next step to convert this correlation improvement into a measured deployable-OFR improvement.
 
 ### Distribution Shift / Transfer Radius Results
 
@@ -186,22 +213,36 @@ Models are trained on one substitution regime and evaluated on another **without
 | K=5, simple | up / down | 0.000 | 2% |
 | K=5, constrained | up / down | 0.000 | 2% |
 
-**Models do not transfer across substitution rates without retraining** — the transfer radius is 0.000 in every stratum and direction tested, failing even at the smallest tested step (2%). This replaces an earlier, looser estimate that used a whole-test-set AUROC criterion instead of a regime-aware one; see `results/transfer_radius/` for the full all-pairs sweep and `results/distribution_shift/` for the 12-condition per-stratum breakdown.
+**Models do not transfer across substitution rates without retraining** — the transfer radius is 0.000 in every stratum and direction tested, failing even at the smallest tested step (2%). This is now measured on a leak-free canonical split (no sequence is ever shared between a source config's training set and a target config's "unseen" test set — see Fixed Issues below), so it's a clean test of generalization to genuinely unseen sequences, not just unseen substitution rates. See `results/transfer_radius/` for the full all-pairs sweep and `results/distribution_shift/` for the 12-condition per-stratum breakdown.
 
 ### Known Limitations
 
-- **`gate_check` currently fails** on its held-out gate config (whole-test-set ECE well above the 0.05 threshold). This reflects the general point above — aggregate calibration metrics are misleading outside the informative regime — rather than a specific bug; it's tracked as informational and does not block the pipeline.
 - **Encoding comparison is largely confounded.** A raw comparison of simple vs. constrained encoding shows constrained encoding failing less often, but post-stratifying on GC content and homopolymer run length (the `encoding_confound` stage) shows most of that raw effect disappears or reverses once composition is controlled for — see `results/encoding_confound/`.
+- **The deployed model underperforms its theoretical ceiling** on roughly a quarter of configs (see Allocation Results) because it optimizes the wrong target (failure risk, not marginal benefit of added parity) — quantified, not hidden, and directly addressed by the Benefit-Aware Model above, which is not yet wired into the allocation OFR experiments themselves.
+
+### Fixed Issues (resolved before manuscript writing)
+
+An external code-level audit surfaced several real bugs, each verified against the code and fixed:
+
+- **XGBoost/Random Forest were silently replaced by a trivial constant model in 15 of 28 configs.** The single-class training guard checked a crude binary (≥0.5) cutoff instead of the continuous target's actual variation, discarding real, learnable signal whenever every sequence happened to land on one side of that cutoff. Fixed in `models/train.py`; all 28 configs now train real regressors.
+- **A related bug inverted the risk score for 4 near-100%-failure configs** (`sub18_k3_*`, `sub20_k3_*`), reporting 0% failure probability for sequences that fail almost every time. Fixed in `models/calibrate.py`.
+- **The same physical sequence could appear in one config's training set and a different config's "held-out" test set**, since each of the 14 substitution-rate/coverage combinations per encoding drew its own independent split from the same underlying 2,000 sequences (up to 72% overlap measured in one pair before the fix). Fixed with one canonical split per encoding scheme in `src/dataset_assembler.py`, shared across every condition.
+- **`gate_check` was comparing the model's continuous prediction against a coarsened binary target** — a semantic mismatch, not a real calibration failure. Once fixed to compare like-for-like, the default gate config passes cleanly (ECE=0.024, well under the 0.05 threshold).
+- **The oracle's benefit/harm estimates used three independently resimulated channel-noise draws** instead of one shared draw evaluated at three parity thresholds, needlessly inflating the Monte Carlo noise floor. Fixed with a paired estimation design (see Allocation Results above).
+- **The "deployable" model secretly used the oracle's own privileged budget size.** Fixed with a separate, validation-only budget selection (see Allocation Results above).
 
 ---
 
 ## Key Design Decisions
 
-- **Calibration matters**: raw model scores are used directly as risk values in the allocation mechanism, so probability calibration (Platt scaling for XGBoost, isotonic for RF) is critical — not just discrimination
-- **Single-class guard**: at extreme substitution rates (both too low and too high), all sequences either pass or fail. A `DummyClassifier` is used at the low end; ablation is skipped entirely at the high end (100% failure rate)
+- **Calibration is a reliability-estimation contribution, not an allocation-quality one**: probability calibration (Platt scaling for XGBoost, isotonic for RF) matters for the model's probability estimates being trustworthy on their own terms — but since the allocation mechanism selects promotion/demotion tiers by *rank* alone, and Platt scaling is monotonic, calibrated and raw scores produce byte-identical allocations under a fixed budget (confirmed directly: `ofr_xgb_cal` and `ofr_xgb_raw` are identical whenever they share a budget). Calibration's value here is in the ECE/Brier/gate-check numbers, not in the allocation outcome itself.
+- **Degeneracy guard uses the actual continuous target**: XGBoost/RF fall back to a trivial constant model only when `failure_freq` itself has no real variation (not when its binarized ≥0.5 version happens to be single-class) — the earlier version of this guard was the source of the 15/28-config dummy-model bug described in Fixed Issues.
+- **Canonical, leak-free splits**: one train/val/test split per encoding scheme, built from sequence identity and a fixed seed, shared across every substitution-rate/coverage condition for that encoding — not stratified by any per-condition quantity like failure_freq, which is what let splits diverge across conditions in the first place.
 - **Budget neutrality**: the allocation mechanism strictly enforces that total parity bytes added equals total parity bytes removed — no free lunch
 - **Monte Carlo evaluation**: OFR is estimated over 30 independent channel simulation runs per configuration to account for stochastic variation
-- **Noise-aware oracle allocation**: the oracle doesn't just rank sequences by estimated marginal benefit — it only reallocates parity when the estimated benefit of promoting one sequence exceeds the estimated harm of demoting another by a statistically-derived margin (not just "benefit > harm"). Naively ranking on point estimates from 30-run Monte Carlo samples is a textbook winner's-curse setup — the top/bottom of a noisy ranking is disproportionately luck, not signal — and without this margin, the oracle can lose to plain uniform allocation despite having privileged information.
+- **Noise-aware oracle allocation**: the oracle doesn't just rank sequences by estimated marginal benefit — it only reallocates parity when the estimated benefit of promoting one sequence exceeds the estimated harm of demoting another by a statistically-derived margin (not just "benefit > harm"). Naively ranking on point estimates from 30-run Monte Carlo samples is a textbook winner's-curse setup — the top/bottom of a noisy ranking is disproportionately luck, not signal.
+- **Paired (common-random-numbers) oracle estimation**: the oracle's low/default/high-parity outcomes are estimated from one shared channel-noise draw per run rather than three independent ones, cancelling shared noise instead of compounding it.
+- **Deployable vs. diagnostic allocation, reported separately**: the model's reallocation budget size is chosen on validation data only (a small grid, frozen before test evaluation) for the deployable claim; the oracle-sized-budget comparison is retained only as a ranking-quality diagnostic and is never conflated with the deployable result.
 
 ---
 
