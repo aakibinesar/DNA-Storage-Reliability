@@ -37,6 +37,14 @@ import yaml
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'models'))
 
+MIN_CLASS_N = 10  # a config's informative regime is only "usable" for AUROC
+# reporting if BOTH classes have at least this many examples. A regime that
+# merely satisfies n_total >= 20 (the Failure Regime Map's threshold) can
+# still have as few as 1 positive example -- an AUROC computed from that is
+# closer to noise than to evidence, regardless of its numeric value (e.g.
+# sub12_k3_constrained: n=251 total but only 1 positive -> AUROC=1.000 is a
+# small-sample artifact, not a real result).
+
 MODEL_LABELS = {
     'xgboost': 'XGBoost',
     'random_forest': 'Random Forest',
@@ -110,6 +118,8 @@ def run_model_comparison(cfg: dict, models_dir: str, out_dir: str) -> pd.DataFra
             all_rows.extend(rows)
 
     combined = pd.DataFrame(all_rows)
+    n_pos = (combined['n'] * combined['class_prevalence']).round()
+    combined['min_class_n'] = np.minimum(n_pos, combined['n'] - n_pos)
     cols = ['key', 'model', 'regime'] + [c for c in combined.columns if c not in ('key', 'model', 'regime')]
     combined = combined[cols]
 
@@ -129,12 +139,14 @@ def run_model_comparison(cfg: dict, models_dir: str, out_dir: str) -> pd.DataFra
 
 def _build_summary(combined: pd.DataFrame) -> pd.DataFrame:
     """Per-model informative-regime summary: mean/median metrics over the
-    subset of configs where that model's informative regime is non-degenerate
-    (i.e. AUROC is actually defined)."""
+    subset of configs where AUROC is both defined AND statistically
+    trustworthy (min_class_n >= MIN_CLASS_N) -- a defined-but-tiny-minority-
+    class AUROC (e.g. 1 positive example) is not usable evidence just
+    because it happens to be a number."""
     info = combined[combined['regime'] == 'informative']
     rows = []
     for model_name, grp in info.groupby('model'):
-        usable = grp[grp['auroc'].notna()]
+        usable = grp[grp['auroc'].notna() & (grp['min_class_n'] >= MIN_CLASS_N)]
         rows.append({
             'model': model_name,
             'n_configs_total': grp['key'].nunique(),
@@ -149,7 +161,8 @@ def _build_summary(combined: pd.DataFrame) -> pd.DataFrame:
 
 
 def _print_summary(summary: pd.DataFrame, combined: pd.DataFrame):
-    print("\n  Informative-regime summary (usable configs only, i.e. non-degenerate AUROC):")
+    print(f"\n  Informative-regime summary (usable = AUROC defined AND "
+          f"min_class_n >= {MIN_CLASS_N}):")
     print(f"  {'Model':<22} {'n_usable':>9} {'AUROC(mean)':>12} {'AUROC(med)':>11} "
           f"{'F1':>7} {'ECE':>7} {'Brier':>7}")
     print(f"  {'-' * 82}")
@@ -161,7 +174,8 @@ def _print_summary(summary: pd.DataFrame, combined: pd.DataFrame):
 
     # Head-to-head: for configs where >=2 models have a usable informative AUROC,
     # which model wins?
-    info = combined[(combined['regime'] == 'informative') & combined['auroc'].notna()]
+    info = combined[(combined['regime'] == 'informative') & combined['auroc'].notna()
+                     & (combined['min_class_n'] >= MIN_CLASS_N)]
     pivot = info.pivot(index='key', columns='model', values='auroc')
     contested = pivot.dropna(thresh=2)
     if len(contested):
@@ -210,8 +224,9 @@ def _collect_informative_predictions(cfg: dict, models_dir: str) -> dict:
         if mask.sum() < 2:
             continue
         y_bin = (ff[mask] >= 0.5).astype(int)
-        if len(np.unique(y_bin)) < 2:
-            continue  # degenerate informative regime -- AUROC undefined
+        n_pos, n_neg = int(y_bin.sum()), int((1 - y_bin).sum())
+        if min(n_pos, n_neg) < MIN_CLASS_N:
+            continue  # AUROC undefined, or defined but statistically untrustworthy
 
         out[key] = {
             'y_bin': y_bin,
