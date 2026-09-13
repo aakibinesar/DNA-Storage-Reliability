@@ -76,8 +76,8 @@ STATUS_PATH = os.path.join(ROOT, 'pipeline_status.json')
 LOG_DIR    = os.path.join(ROOT, 'logs')
 
 STAGE_ORDER = ['datasets', 'train', 'gate_check', 'threshold_sensitivity',
-               'calibration_regimes', 'regime_evaluation', 'allocation',
-               'ablation', 'distribution_shift', 'transfer_radius',
+               'calibration_regimes', 'regime_evaluation', 'model_comparison',
+               'allocation', 'ablation', 'distribution_shift', 'transfer_radius',
                'shap_stability', 'encoding_confound',
                'channel_ablation', 'figures']
 
@@ -348,6 +348,23 @@ def stage_regime_evaluation(cfg, args):
                    os.path.join(LOG_DIR, 'regime_evaluation.log'), args.dry_run)
 
 
+def stage_model_comparison(cfg, args):
+    """Unified XGBoost / Random Forest / Logistic Regression comparison,
+    scored on the same regime-stratified Layer 1 suite as regime_evaluation."""
+    out_dir  = os.path.join(cfg['paths']['results_dir'], 'model_comparison')
+    out_path = os.path.join(out_dir, 'model_comparison_all.csv')
+    if not args.force and os.path.exists(os.path.join(ROOT, out_path)):
+        print("[model_comparison] Combined CSV already exists — skipping.")
+        set_item_status('model_comparison', state='SKIPPED')
+        return 0
+    cmd = [sys.executable, '-u', 'analysis/model_comparison.py',
+           '--config', args.config,
+           '--models-dir', cfg['paths']['models_dir'],
+           '--out', out_dir]
+    return run_cmd('model_comparison', cmd,
+                   os.path.join(LOG_DIR, 'model_comparison.log'), args.dry_run)
+
+
 def stage_calibration_regimes(cfg, args):
     """R9: regime-stratified calibration with bootstrap CIs."""
     keys    = get_all_keys(cfg)
@@ -519,6 +536,7 @@ STAGE_FUNCS = {
     'threshold_sensitivity' : stage_threshold_sensitivity,
     'calibration_regimes'   : stage_calibration_regimes,
     'regime_evaluation'     : stage_regime_evaluation,
+    'model_comparison'      : stage_model_comparison,
     'allocation'            : stage_allocation,
     'ablation'              : stage_ablation,
     'distribution_shift'    : stage_distribution_shift,

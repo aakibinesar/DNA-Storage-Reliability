@@ -68,6 +68,7 @@ Across the 28 configurations, three distinct regimes emerge:
 │   ├── threshold_sensitivity.py  # Decision-threshold sweep, near-threshold label noise
 │   ├── calibration_regimes.py    # Regime-stratified calibration with bootstrap CIs
 │   ├── regime_evaluation.py      # Full Layer 1 metrics per regime, all configs
+│   ├── model_comparison.py       # XGBoost vs. Random Forest vs. Logistic Regression, same metric suite
 │   ├── distribution_shift.py     # Cross-regime transfer experiments
 │   ├── transfer_radius.py        # Formal all-pairs transfer radius (regime-aware AUROC)
 │   ├── shap_stability.py         # Bootstrap SHAP feature-importance stability
@@ -129,6 +130,7 @@ python run_pipeline.py --status
 | `threshold_sensitivity` | Wilson-interval label-noise sweep across decision thresholds |
 | `calibration_regimes` | Regime-stratified ECE/Brier with bootstrap 95% CIs |
 | `regime_evaluation` | Full Layer 1 metric suite (AUROC/F1/ECE/Brier), stratified by regime |
+| `model_comparison` | XGBoost vs. Random Forest vs. Logistic Regression, same metric suite |
 | `allocation` | Adaptive vs. uniform vs. oracle vs. rule-based-baseline allocation (84 experiments) |
 | `ablation` | Feature group ablation across all 28 configs |
 | `distribution_shift` | Cross-substitution-regime transfer robustness tests (12 conditions per stratum) |
@@ -152,6 +154,7 @@ results/
 ├── transfer_radius/        # formal all-pairs transfer radius (regime-aware AUROC)
 ├── calibration_regimes/    # per-config regime-stratified ECE/Brier with bootstrap CIs
 ├── regime_evaluation/      # full Layer 1 metrics per config per regime
+├── model_comparison/       # XGBoost vs. RF vs. Logistic Regression, same metric suite
 ├── threshold_sensitivity/  # decision-threshold sweep + near-threshold label noise
 ├── shap_stability/         # bootstrap SHAP feature-importance stability
 ├── encoding_confound/      # deconfounded simple-vs-constrained encoding comparison
@@ -244,6 +247,22 @@ A larger Δ moves each reallocated sequence across a bigger capacity gap. That a
 | `sub18_k5_simple` | +0.10% | +0.22% |
 
 With sequence selection held completely fixed, the Δ=4-sized swap costs more than the Δ=2-sized swap in all four cases — confirming the leverage effect directly, rather than inferring it from aggregate before/after numbers alone. **Practical takeaway**: Δ=2 is the safer operating point (smaller downside per wrong decision), and Δ=4 is only worth it if the ranking model is good enough, and consistently good enough across the deployed regime, to be trusted with the larger per-decision stakes it creates.
+
+### Model Comparison: XGBoost vs. Random Forest vs. Logistic Regression
+
+XGBoost is the primary model used everywhere above, but all three tiers are trained for every config (`models/train.py`). `analysis/model_comparison.py` scores all three on the same footing — the informative-regime Layer 1 suite from Regime Evaluation above (regime assignment and binary labels both derived from the same continuous `failure_freq`, so a linear discriminator and two calibrated regressors are compared on one common yardstick, not three different targets):
+
+| Model | Usable configs | Mean AUROC | Median AUROC | Mean F1 | Mean ECE | Mean Brier |
+|---|---|---|---|---|---|---|
+| XGBoost (Platt-calibrated) | 12 / 28 | 0.858 | 0.914 | 0.655 | 0.040 | 0.0095 |
+| **Random Forest (isotonic-calibrated)** | 12 / 28 | **0.866** | **0.948** | **0.713** | **0.034** | **0.0086** |
+| Logistic Regression | 12 / 28 | 0.795 | 0.828 | 0.515 | 0.225 | 0.0739 |
+
+All three reach a usable informative regime on the same 12 of 28 configs, confirming that count is a property of the data regime, not of any one model's failure to fit.
+
+**Random Forest and XGBoost are not meaningfully different on discrimination**: a paired Wilcoxon signed-rank test on informative-regime AUROC across the 12 shared configs gives W=22, p=0.63 (mean difference +0.008 in RF's favor, 5 configs favoring each, 2 exact ties) — well short of significance. RF's edge in the table above is concentrated in F1/ECE/Brier, i.e. calibration and decision-threshold behavior, not ranking quality; the likely explanation is that isotonic calibration (RF) is a more flexible fit than Platt scaling (XGBoost) on this dataset size, not that the underlying random-forest model discriminates failure risk better than gradient boosting. **Logistic Regression is clearly worse on every metric** — expected, since it is a linear discriminator forced onto the majority-fail binary label while the other two regress directly on the continuous failure frequency, and the informative regime is exactly where a linear decision boundary is least likely to hold.
+
+**Practical takeaway**: XGBoost remains a reasonable default (it's the model wired through calibration, allocation, and SHAP analysis throughout this project), but Random Forest is a legitimate, currently under-exploited alternative worth calibration attention in any follow-up work — the two are statistically tied on the metric that actually drives allocation quality (ranking), and RF's calibration numbers are better out of the box. See `results/model_comparison/` for the full per-config, per-regime breakdown.
 
 ### Distribution Shift / Transfer Radius Results
 
