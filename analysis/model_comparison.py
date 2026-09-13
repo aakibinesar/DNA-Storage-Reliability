@@ -171,6 +171,165 @@ def _print_summary(summary: pd.DataFrame, combined: pd.DataFrame):
             print(f"    {MODEL_LABELS.get(model_name, model_name):<22} {count} / {len(contested)}")
 
 
+N_BOOTSTRAP = 2000
+
+
+def _collect_informative_predictions(cfg: dict, models_dir: str) -> dict:
+    """Per-config informative-regime binary labels + XGBoost/RF probabilities,
+    restricted to configs where BOTH models have a non-degenerate (mixed-class)
+    informative regime -- i.e. the same 12/28 'usable' configs used elsewhere.
+    """
+    from dataset_assembler import load_dataset
+    from train import load_models
+
+    lo = cfg.get('evaluation', {}).get('regime_lo', 0.15)
+    hi = cfg.get('evaluation', {}).get('regime_hi', 0.85)
+
+    sub_rates = cfg['channel']['substitution_rates']
+    coverages = cfg['coverage_depths']
+    encodings = cfg['sequence']['encoding_schemes']
+    all_keys  = [
+        f'sub{int(s * 100):02d}_k{k}_{e}'
+        for s in sub_rates for k in coverages for e in encodings
+    ]
+
+    out = {}
+    for key in all_keys:
+        try:
+            X_tr, X_val, X_te, y_tr, y_val, y_te, feat_names = load_dataset(key, cfg)
+            models = load_models(models_dir, key)
+        except Exception:
+            continue
+        xgb_cal = models.get('xgboost')
+        rf_cal  = models.get('random_forest')
+        if xgb_cal is None or rf_cal is None:
+            continue
+
+        ff = np.asarray(y_te, dtype=float)
+        mask = (ff >= lo) & (ff <= hi)
+        if mask.sum() < 2:
+            continue
+        y_bin = (ff[mask] >= 0.5).astype(int)
+        if len(np.unique(y_bin)) < 2:
+            continue  # degenerate informative regime -- AUROC undefined
+
+        out[key] = {
+            'y_bin': y_bin,
+            'xgboost': np.clip(xgb_cal.predict_proba(X_te)[mask], 0.0, 1.0),
+            'random_forest': np.clip(rf_cal.predict_proba(X_te)[mask], 0.0, 1.0),
+        }
+    return out
+
+
+def bootstrap_model_comparison(
+    cfg: dict, models_dir: str, out_dir: str,
+    n_bootstrap: int = N_BOOTSTRAP, seed: int = 42,
+) -> pd.DataFrame:
+    """Reviewer-grade statistical comparison of RF vs. XGBoost informative-
+    regime AUROC: per-config bootstrap CIs, plus a two-level (config +
+    within-config) cluster bootstrap for the overall mean difference.
+
+    A paired Wilcoxon test on 12 config-level point estimates (used in the
+    initial pass at this comparison) is fair but low-powered by construction
+    -- it throws away every within-config sample and treats 12 configs as
+    the entire sample size. Bootstrapping the actual test sequences (not
+    just the config means) uses the real amount of data actually available
+    and gives a proper confidence interval instead of a single p-value.
+    """
+    from sklearn.metrics import roc_auc_score
+
+    os.makedirs(out_dir, exist_ok=True)
+    data = _collect_informative_predictions(cfg, models_dir)
+    keys = sorted(data.keys())
+    print(f"[model_comparison] Bootstrap comparison over {len(keys)} usable configs, "
+          f"n_bootstrap={n_bootstrap}")
+
+    rng = np.random.default_rng(seed)
+
+    # -- Per-config bootstrap CIs --------------------------------------------
+    rows = []
+    per_config_diffs = {}  # key -> array of bootstrap AUROC diffs (for the cluster step)
+    for key in keys:
+        d = data[key]
+        y_bin, p_xgb, p_rf = d['y_bin'], d['xgboost'], d['random_forest']
+        n = len(y_bin)
+        diffs = np.full(n_bootstrap, np.nan)
+        for b in range(n_bootstrap):
+            idx = rng.integers(0, n, size=n)
+            yb = y_bin[idx]
+            if len(np.unique(yb)) < 2:
+                continue
+            auc_rf  = roc_auc_score(yb, p_rf[idx])
+            auc_xgb = roc_auc_score(yb, p_xgb[idx])
+            diffs[b] = auc_rf - auc_xgb
+        valid = diffs[~np.isnan(diffs)]
+        per_config_diffs[key] = valid
+        point_rf  = roc_auc_score(y_bin, p_rf)
+        point_xgb = roc_auc_score(y_bin, p_xgb)
+        lo_ci, hi_ci = np.percentile(valid, [2.5, 97.5]) if len(valid) else (np.nan, np.nan)
+        rows.append({
+            'key': key, 'n': n,
+            'auroc_rf': point_rf, 'auroc_xgb': point_xgb,
+            'diff_rf_minus_xgb': point_rf - point_xgb,
+            'boot_diff_ci_lo': lo_ci, 'boot_diff_ci_hi': hi_ci,
+            'ci_excludes_zero': bool(lo_ci > 0 or hi_ci < 0) if np.isfinite(lo_ci) else False,
+            'n_valid_bootstraps': len(valid),
+        })
+    per_config_df = pd.DataFrame(rows)
+    per_config_path = os.path.join(out_dir, 'model_comparison_bootstrap_per_config.csv')
+    per_config_df.to_csv(per_config_path, index=False, float_format='%.6f')
+
+    # -- Two-level cluster bootstrap for the overall mean difference ---------
+    # Resample configs with replacement, and independently resample sequences
+    # within each drawn config, so both between-config and within-config
+    # uncertainty are propagated into the final interval.
+    overall_diffs = np.full(n_bootstrap, np.nan)
+    for b in range(n_bootstrap):
+        drawn_keys = rng.choice(keys, size=len(keys), replace=True)
+        iter_diffs = []
+        for key in drawn_keys:
+            d = data[key]
+            n = len(d['y_bin'])
+            idx = rng.integers(0, n, size=n)
+            yb = d['y_bin'][idx]
+            if len(np.unique(yb)) < 2:
+                continue
+            auc_rf  = roc_auc_score(yb, d['random_forest'][idx])
+            auc_xgb = roc_auc_score(yb, d['xgboost'][idx])
+            iter_diffs.append(auc_rf - auc_xgb)
+        if iter_diffs:
+            overall_diffs[b] = np.mean(iter_diffs)
+    valid_overall = overall_diffs[~np.isnan(overall_diffs)]
+    overall_lo, overall_hi = np.percentile(valid_overall, [2.5, 97.5])
+    overall_mean = valid_overall.mean()
+    frac_positive = float((valid_overall > 0).mean())
+
+    summary_row = {
+        'n_configs': len(keys),
+        'n_bootstrap': n_bootstrap,
+        'mean_diff_rf_minus_xgb': overall_mean,
+        'ci_95_lo': overall_lo,
+        'ci_95_hi': overall_hi,
+        'ci_excludes_zero': bool(overall_lo > 0 or overall_hi < 0),
+        'frac_bootstraps_rf_better': frac_positive,
+    }
+    pd.DataFrame([summary_row]).to_csv(
+        os.path.join(out_dir, 'model_comparison_bootstrap_overall.csv'),
+        index=False, float_format='%.6f',
+    )
+
+    n_excl = int(per_config_df['ci_excludes_zero'].sum())
+    print(f"\n  Per-config bootstrap CIs saved -> {per_config_path}")
+    print(f"  {n_excl} / {len(keys)} configs have a 95% CI excluding zero (RF vs. XGBoost AUROC)")
+    print(f"\n  Cluster bootstrap (configs + within-config resampled together):")
+    print(f"    mean diff (RF - XGBoost) = {overall_mean:+.4f}")
+    print(f"    95% CI = [{overall_lo:+.4f}, {overall_hi:+.4f}]  "
+          f"({'excludes zero' if summary_row['ci_excludes_zero'] else 'includes zero'})")
+    print(f"    fraction of bootstrap draws favoring RF: {frac_positive:.1%}")
+
+    return per_config_df
+
+
 def main():
     parser = argparse.ArgumentParser(
         description='Unified XGBoost / Random Forest / Logistic Regression comparison.'
@@ -178,12 +337,18 @@ def main():
     parser.add_argument('--config',     default='configs/experiment_config.yaml')
     parser.add_argument('--models-dir', default='models/saved/')
     parser.add_argument('--out',        default='results/model_comparison/')
+    parser.add_argument('--bootstrap',  action='store_true',
+                         help='Also run the RF-vs-XGBoost bootstrap CI comparison.')
+    parser.add_argument('--n-bootstrap', type=int, default=N_BOOTSTRAP)
     args = parser.parse_args()
 
     with open(args.config) as f:
         cfg = yaml.safe_load(f)
 
     run_model_comparison(cfg, args.models_dir, args.out)
+
+    if args.bootstrap:
+        bootstrap_model_comparison(cfg, args.models_dir, args.out, args.n_bootstrap)
 
 
 if __name__ == '__main__':
