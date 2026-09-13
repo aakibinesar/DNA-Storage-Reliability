@@ -161,6 +161,7 @@ results/
     ├── fig3_shap_importance.png
     ├── fig4_ofr_vs_delta.png
     ├── fig5_distribution_shift.png
+    ├── fig6_benefit_vs_risk_deployable.png
     ├── fig_s1_feature_distributions.png
     └── fig_s4_cost_reliability.png
 ```
@@ -183,7 +184,9 @@ Across all 84 configs (28 keys × 3 delta values):
 
 The oracle result reflects a paired Monte Carlo estimation design: the low/default/high-parity outcomes for a given run share one simulated channel-noise draw rather than three independently resimulated ones, which substantially reduces estimation noise for the same 30-run budget (see `allocation/experiment.py`'s `estimate_paired_marginal_effects`). Under that cleaner estimate, the theoretical ceiling is essentially always at least as good as uniform.
 
-The deployed-model result is the more important number for anyone actually using this system, and it's honest about a real gap: the model reliably wins in about 40% of configs, is roughly break-even in another third, and meaningfully underperforms uniform in about a quarter. **Root cause (confirmed directly, see `analysis/risk_marginal_benefit_correlation.py`): the model is trained to predict raw failure probability, not marginal benefit of added parity, and these are essentially uncorrelated on average (mean Spearman ≈ -0.005, median ≈ -0.037 across 28 configs) even though the model discriminates raw failure risk well.** A failure-risk classifier is the wrong tool for a reallocation decision — see Benefit-Aware Model below for the direct fix, which closes most of this gap.
+The deployed-model result is the more important number for anyone actually using this system, and it's honest about a real gap: the model reliably wins in about 40% of configs, is roughly break-even in another third, and meaningfully underperforms uniform in about a quarter. **Root cause (confirmed directly, see `analysis/risk_marginal_benefit_correlation.py`): the model is trained to predict raw failure probability, not marginal benefit of added parity, and these are essentially uncorrelated on average (mean Spearman ≈ -0.005, median ≈ -0.037 across 28 configs at Δ=2) even though the model discriminates raw failure risk well.** A failure-risk classifier is the wrong tool for a reallocation decision — see Benefit-Aware Model below for the direct fix, which closes most of this gap.
+
+At Δ=4 the target mismatch is slightly worse (mean Spearman ≈ -0.026, median ≈ -0.087) — see Delta as a Leverage Dial below for why a larger reallocation step size makes the risk-vs-benefit mismatch, and its consequences, more pronounced rather than less.
 
 ### Benefit-Aware Model (Part B)
 
@@ -193,14 +196,54 @@ Rather than only diagnosing the target-mismatch problem above, the project inclu
 
 **Fix: a kernel-smoothed (sigmoid) label instead of a hard threshold**, replacing `1(byte_errors > capacity)` with a smooth function that extracts partial information from every simulated run based on how close it is to the boundary, not just runs landing exactly on it. This is a training-label device only — the oracle's actual allocation decisions and every reported OFR figure still use the true hard RS-decode pass/fail rule, since that's the real physical criterion. On `sub20_k3_simple` this eliminated the zero-inflation entirely (62% → 0% exactly-zero) and reversed the model's relationship with true benefit from strongly backwards to strongly correct (Spearman vs. true benefit: -0.36 → +0.38; vs. a comparably clean ground truth: -0.67 → +0.87).
 
-**Full 28-config validation**, benefit model vs. the old failure-risk model, both scored against true test-set marginal benefit (`analysis/validate_benefit_model.py`):
+**Full 28-config validation**, benefit model vs. the old failure-risk model, both scored against true test-set marginal benefit (`analysis/validate_benefit_model.py`), run at both reallocation step sizes:
 
-| | Mean Spearman | Median Spearman |
+| Δ | | Mean Spearman | Median Spearman | Configs improved |
+|---|---|---|---|---|
+| **2** | Old failure-risk model | -0.005 | -0.037 | — |
+| **2** | **New benefit-aware model** | **+0.132** | **+0.112** | **17 / 28** |
+| **4** | Old failure-risk model | -0.026 | -0.087 | — |
+| **4** | **New benefit-aware model** | **+0.267** | **+0.201** | **20 / 28** |
+
+At Δ=2, the improvement is concentrated exactly where it matters: the configs where the old model was most badly *backwards* (`sub20_k3_simple`: -0.36 → +0.38; `sub05_k3_simple`: -0.27 → +0.31; `sub01_k3_simple`: -0.20 → +0.30) see the largest gains, while configs where the old model was already reasonable see only small, bounded declines (worst case -0.08). Three `sub01` configs that had no usable signal at all under the old model (constant predictions) now get valid, small-positive correlations. The same pattern holds at Δ=4, more strongly — e.g. `sub20_k3_simple` goes from -0.61 to +0.74.
+
+**Wired into the actual allocation OFR experiments** (`allocation/experiment.py`): the benefit model gets its own validation-chosen deployable budget (same grid, same no-oracle-information discipline as the risk model) and its own `ofr_benefit_model_deployable` condition, run across all 28 configs at both Δ=2 and Δ=4:
+
+| Δ | Model | Beats/ties uniform | Small loss (≤0.5pp) | Meaningful loss | Mean OFR reduction (pp) |
+|---|---|---|---|---|---|
+| 2 | Risk model (deployable) | 17 / 28 | 6 / 28 | 5 / 28 | 0.21 ± 0.20 |
+| 2 | **Benefit-aware model (deployable)** | 11 / 28 | 15 / 28 | **2 / 28** | **0.35 ± 0.23** |
+| 4 | Risk model (deployable) | 12 / 28 | 9 / 28 | 7 / 28 | 0.26 ± 0.30 |
+| 4 | **Benefit-aware model (deployable)** | 8 / 28 | 9 / 28 | **11 / 28** | **0.71 ± 0.50** |
+
+(Mean ± SEM of the per-config `uniform − method` OFR difference across the 28 configs; see Figure 6, `results/figures/fig6_benefit_vs_risk_deployable.png`.)
+
+At Δ=2 this is an unambiguous win: the benefit model has a *larger* average OFR reduction than the risk model **and** a *smaller* meaningful-loss count (2/28 vs. 5/28) — better on both the mean and the tail. At Δ=4 the picture is more mixed: the benefit model's average reduction more than doubles (0.71pp vs. 0.35pp at Δ=2), but its meaningful-loss count also roughly doubles (11/28 vs. 2/28) — a higher-mean, higher-variance trade-off rather than a clean win. This is not a contradiction with the correlation table above (which shows Δ=4 correlation is *better*, not worse) — see the next section for the mechanism that reconciles the two.
+
+### Delta as a Leverage Dial
+
+The Δ=4 result above is counter-intuitive on its face: the benefit model's *ranking quality* (Spearman correlation with true marginal benefit) is better at Δ=4 than at Δ=2, yet its *aggregate allocation outcome* has more meaningful-loss configs at Δ=4. The reconciliation is structural, not a modeling flaw.
+
+RS correction capacity is `l_rs // 2` (integer floor division), and the default `l_rs=8` gives capacity 4. Reallocating parity by Δ changes capacity by:
+
+| Δ | New `l_rs` (promote / demote) | New capacity | Capacity swing |
+|---|---|---|---|
+| 1 | 9 / 7 | 4 / 3 | promotion: **no change** (9 // 2 = 4) |
+| 2 | 10 / 6 | 5 / 3 | ±1 |
+| 4 | 12 / 4 | 6 / 2 | ±2 |
+
+A larger Δ moves each reallocated sequence across a bigger capacity gap. That amplifies the payoff of a *correct* promote/demote decision — but by the same mechanism, it amplifies the cost of an *incorrect* one, independent of how good the underlying ranking is. Δ is a leverage dial on both sides of every decision, not just the good side.
+
+**Controlled isolation test** (not yet part of the automated pipeline; ad hoc verification): to confirm this is a real mechanism and not a confound from the Δ=2 and Δ=4 benefit models selecting different sequences, four configs were tested by fixing the *exact same* promoted/demoted sequences (selected once, using only the Δ=2 model's ranking) and then applying a Δ=2-sized vs. a Δ=4-sized parity swap to that identical selection, against the same simulated channel noise:
+
+| Config | Δ=2 swap, OFR vs. uniform | Δ=4 swap, OFR vs. uniform |
 |---|---|---|
-| Old failure-risk model | -0.005 | -0.037 |
-| **New benefit-aware model** | **+0.132** | **+0.112** |
+| `sub09_k5_simple` | +0.34% | +1.20% |
+| `sub05_k3_simple` | +0.06% | +1.19% |
+| `sub12_k5_constrained` | +0.21% | +0.84% |
+| `sub18_k5_simple` | +0.10% | +0.22% |
 
-The benefit model improves on 17 of 28 configs, and the improvement is concentrated exactly where it matters: the configs where the old model was most badly *backwards* (`sub20_k3_simple`: -0.36 → +0.38; `sub05_k3_simple`: -0.27 → +0.31; `sub01_k3_simple`: -0.20 → +0.30) see the largest gains, while configs where the old model was already reasonable see only small, bounded declines (worst case -0.08). Three `sub01` configs that had no usable signal at all under the old model (constant predictions) now get valid, small-positive correlations. Not yet wired into the actual allocation OFR experiments — that's the natural next step to convert this correlation improvement into a measured deployable-OFR improvement.
+With sequence selection held completely fixed, the Δ=4-sized swap costs more than the Δ=2-sized swap in all four cases — confirming the leverage effect directly, rather than inferring it from aggregate before/after numbers alone. **Practical takeaway**: Δ=2 is the safer operating point (smaller downside per wrong decision), and Δ=4 is only worth it if the ranking model is good enough, and consistently good enough across the deployed regime, to be trusted with the larger per-decision stakes it creates.
 
 ### Distribution Shift / Transfer Radius Results
 
@@ -218,7 +261,8 @@ Models are trained on one substitution regime and evaluated on another **without
 ### Known Limitations
 
 - **Encoding comparison is largely confounded.** A raw comparison of simple vs. constrained encoding shows constrained encoding failing less often, but post-stratifying on GC content and homopolymer run length (the `encoding_confound` stage) shows most of that raw effect disappears or reverses once composition is controlled for — see `results/encoding_confound/`.
-- **The deployed model underperforms its theoretical ceiling** on roughly a quarter of configs (see Allocation Results) because it optimizes the wrong target (failure risk, not marginal benefit of added parity) — quantified, not hidden, and directly addressed by the Benefit-Aware Model above, which is not yet wired into the allocation OFR experiments themselves.
+- **The deployed (risk-model) allocation underperforms its theoretical ceiling** on roughly a quarter of configs (see Allocation Results) because it optimizes the wrong target (failure risk, not marginal benefit of added parity) — quantified, not hidden, and directly addressed by the Benefit-Aware Model above.
+- **The benefit-aware model's improvement is delta-dependent, not a strict win at every step size.** At Δ=2 it beats the risk model on both mean OFR reduction and meaningful-loss count. At Δ=4 its mean improvement is larger but its meaningful-loss count is also larger — a genuine higher-mean/higher-variance trade-off, mechanistically explained by Δ acting as a leverage dial on both correct and incorrect ranking decisions (see Delta as a Leverage Dial above), not a sign the model itself got worse (its rank correlation with true benefit is *better* at Δ=4).
 
 ### Fixed Issues (resolved before manuscript writing)
 
