@@ -79,6 +79,7 @@ Across the 28 configurations, three distinct regimes emerge:
 │   └── figures.py                # Paper figures (Figs 2–5, S1, S4)
 ├── configs/
 │   └── experiment_config.yaml    # All hyperparameters and grid settings
+├── tests/                        # Regression tests for the audit-found bugs + leakage checks
 └── run_pipeline.py               # End-to-end orchestrator with checkpointing
 ```
 
@@ -87,10 +88,22 @@ Across the 28 configurations, three distinct regimes emerge:
 ## Installation
 
 ```bash
-pip install numpy pandas scipy scikit-learn xgboost shap matplotlib seaborn pyyaml pyarrow
+pip install numpy pandas scipy scikit-learn xgboost shap matplotlib seaborn pyyaml pyarrow pytest
 ```
 
 Python 3.10+ recommended.
+
+### Regression / Leakage Tests
+
+```bash
+python -m pytest tests/ -v
+```
+
+Covers the two most severe bugs found by the external code audit, as direct regression tests against synthetic data that reconstructs each bug's exact trigger condition (not just re-running the pipeline and eyeballing the output):
+
+- **`test_train_degeneracy_guard.py`** — the single-class training guard for XGBoost/RF must key off the continuous target's actual variance, not a binarised (≥0.5) cutoff (the bug that silently substituted a trivial constant model in 15/28 real configs).
+- **`test_calibration_fallback.py`** — a degenerate single-class model must report the probability matching its *actual* class (1.0 for an all-positive fallback, 0.0 for all-negative), not the old hard-coded 0 regardless of which class it was (the bug that inverted the risk score for 4 near-100%-failure configs).
+- **`test_canonical_splits.py`** — runs against the real on-disk `data/splits/` and `data/datasets/` files (skipped if they don't exist yet): every config's train/val/test partition is disjoint and complete, and — the actual leakage bug — every config sharing an encoding scheme assigns the *same* physical sequence to the *same* split, so a sequence can never be "seen" in one config's training set and "held out" in another's test set.
 
 ---
 
