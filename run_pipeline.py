@@ -360,7 +360,7 @@ def stage_model_comparison(cfg, args):
     cmd = [sys.executable, '-u', 'analysis/model_comparison.py',
            '--config', args.config,
            '--models-dir', cfg['paths']['models_dir'],
-           '--out', out_dir]
+           '--out', out_dir, '--bootstrap']
     return run_cmd('model_comparison', cmd,
                    os.path.join(LOG_DIR, 'model_comparison.log'), args.dry_run)
 
