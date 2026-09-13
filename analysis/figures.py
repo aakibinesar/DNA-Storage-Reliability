@@ -56,6 +56,8 @@ PALETTE     = {
     'random'     : '#607D8B',  # R10 allocation control
     'simple'     : '#FF9800',
     'constrained': '#E91E63',
+    'risk_dep'   : '#4CAF50',  # risk model, deployable (validation-chosen) budget
+    'benefit_dep': '#00BCD4',  # Part B benefit-aware model, deployable budget
 }
 
 
@@ -301,6 +303,64 @@ def figure_s4_cost_reliability(
     _save_fig(fig, out_path)
 
 
+# -- Figure 6: Benefit-aware model vs. risk model (deployable, Part B) -------
+
+def figure6_benefit_vs_risk_deployable(
+    alloc_dir: str,
+    delta_values: List[int],
+    out_path: str,
+):
+    """Per-config paired OFR reduction: risk model vs. benefit-aware model.
+
+    Both conditions use a validation-chosen (deployable) tier fraction (no
+    oracle privilege). Plotted as (uniform - method) per config, i.e.
+    positive = improvement over doing nothing, so the effect isn't swamped
+    by the huge across-config spread in raw OFR (near-zero to near-total
+    failure depending on substitution rate / coverage / encoding).
+    """
+    import glob
+    _setup_style()
+
+    deltas, per_delta = [], {}
+    for delta in sorted(delta_values):
+        risk_diffs, benefit_diffs = [], []
+        for path in glob.glob(os.path.join(alloc_dir, f'*_delta{delta}.npz')):
+            d = np.load(path)
+            if 'ofr_benefit_model_deployable' not in d.files or 'ofr_xgb_cal_deployable' not in d.files:
+                continue
+            unif = d['ofr_uniform'].mean()
+            risk_diffs.append(unif - d['ofr_xgb_cal_deployable'].mean())
+            benefit_diffs.append(unif - d['ofr_benefit_model_deployable'].mean())
+        if risk_diffs:
+            deltas.append(delta)
+            per_delta[delta] = (np.array(risk_diffs), np.array(benefit_diffs))
+
+    if not deltas:
+        return
+
+    fig, ax = plt.subplots(figsize=(7.5, 5))
+    x = np.arange(len(deltas))
+    w = 0.32
+
+    for i, (label, colour, sel) in enumerate([
+        ('Risk model (deployable)',        PALETTE['risk_dep'],    0),
+        ('Benefit-aware model (deployable)', PALETTE['benefit_dep'], 1),
+    ]):
+        means = np.array([per_delta[d][sel].mean() for d in deltas])
+        sems  = np.array([per_delta[d][sel].std(ddof=1) / np.sqrt(len(per_delta[d][sel])) for d in deltas])
+        ax.bar(x + (i - 0.5) * w, means * 100, w, yerr=sems * 100, capsize=4,
+               color=colour, label=label, alpha=0.9)
+
+    ax.axhline(0, color='k', linewidth=0.8)
+    ax.set_xticks(x)
+    ax.set_xticklabels([f'$\\Delta={d}$ (n={len(per_delta[d][0])} configs)' for d in deltas])
+    ax.set_ylabel('Mean OFR reduction vs. uniform (percentage points)')
+    ax.set_title('Deployable Allocation: Risk Model vs. Benefit-Aware Model')
+    ax.legend(fontsize=9)
+    plt.tight_layout()
+    _save_fig(fig, out_path)
+
+
 # -- Utility ------------------------------------------------------------------
 
 def _save_fig(fig, out_path: str, dpi: int = FIG_DPI):
@@ -409,8 +469,12 @@ def main():
             delta_results,
             out_path=os.path.join(out, 'fig_s4_cost_reliability.png')
         )
+        figure6_benefit_vs_risk_deployable(
+            alloc_dir, cfg['allocation']['delta_values'],
+            out_path=os.path.join(out, 'fig6_benefit_vs_risk_deployable.png')
+        )
     else:
-        print("  [figures] No allocation NPZ files found — skipping Figures 4/S4")
+        print("  [figures] No allocation NPZ files found — skipping Figures 4/S4/6")
 
     # -- Figure 5: distribution shift ------------------------------------------
     shift_dir = os.path.normpath(os.path.join(
