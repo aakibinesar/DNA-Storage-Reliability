@@ -20,10 +20,17 @@ significance layer: for every config x delta combination, is the observed
 gap between a given condition and uniform allocation distinguishable from
 noise, and after correcting for running 84 tests at once?
 
-Two comparisons are tested per config x delta:
-  oracle_vs_uniform  -- the R4-fixed theoretical ceiling vs. uniform
-  xgb_cal_vs_uniform -- the actual deployed model vs. uniform (the paper's
-                        real-world claim, distinct from the oracle ceiling)
+Four comparisons are tested per config x delta (the last two only exist for
+delta in {2, 4}, since the benefit-aware model was not trained at delta=1):
+  oracle_vs_uniform              -- the R4-fixed theoretical ceiling vs. uniform
+                                     (diagnostic: oracle-sized budget)
+  xgb_cal_vs_uniform             -- risk model vs. uniform, oracle-sized budget
+                                     (diagnostic: ranking quality only)
+  xgb_cal_deployable_vs_uniform  -- risk model vs. uniform, validation-chosen
+                                     budget (the paper's actual deployable claim)
+  benefit_model_deployable_vs_uniform -- benefit-aware model (Part B) vs.
+                                     uniform, validation-chosen budget (the
+                                     paper's actual deployable claim)
 
 Multiple-comparisons correction: Benjamini-Hochberg FDR at alpha=0.05,
 applied separately within each comparison's family of 84 tests.
@@ -52,8 +59,10 @@ _FILENAME_RE = re.compile(r'^(?P<key>.+)_delta(?P<delta>\d+)\.npz$')
 
 # condition -> comparison name
 _COMPARISONS = {
-    'ofr_oracle':  'oracle_vs_uniform',
-    'ofr_xgb_cal': 'xgb_cal_vs_uniform',
+    'ofr_oracle':                   'oracle_vs_uniform',
+    'ofr_xgb_cal':                  'xgb_cal_vs_uniform',
+    'ofr_xgb_cal_deployable':       'xgb_cal_deployable_vs_uniform',
+    'ofr_benefit_model_deployable': 'benefit_model_deployable_vs_uniform',
 }
 
 
