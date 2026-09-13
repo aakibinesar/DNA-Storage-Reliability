@@ -1,0 +1,4 @@
+model,n_configs_total,n_configs_usable,mean_auroc,median_auroc,mean_f1,mean_ece,mean_brier
+logistic_regression,28,12,0.794860,0.828315,0.514878,0.224812,0.073919
+random_forest,28,12,0.866240,0.948044,0.713097,0.034250,0.008599
+xgboost,28,12,0.857803,0.913672,0.655216,0.039600,0.009508
