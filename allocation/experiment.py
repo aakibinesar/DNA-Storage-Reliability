@@ -410,6 +410,8 @@ def run_allocation_experiment(
     l_rs_max:          int = 16,
     verbose:           bool = False,
     tier_fraction_deployable: float = None,
+    benefit_scores:    np.ndarray = None,
+    tier_fraction_benefit: float = None,
 ) -> Dict[str, np.ndarray]:
     """Run all four allocation conditions across M independent simulator runs.
 
@@ -459,6 +461,19 @@ def run_allocation_experiment(
     marginal_harm      : array (N,) — pre-computed from estimate_paired_marginal_effects().
     tier_fraction_deployable : optional fixed budget fraction, chosen on
         validation data only, for the fair "*_deployable" conditions.
+    benefit_scores : optional (N,) predictions from the Part B benefit-aware
+        model (models/train_benefit_model.py) on the test sequences. Ranked
+        the same way as calibrated_risk -- highest score promoted, lowest
+        demoted -- since a high benefit-model score means "this sequence
+        benefits most from added parity" just as a high risk-model score
+        means "this sequence is most likely to fail," and both should be
+        promoted. When provided along with tier_fraction_benefit, adds the
+        'ofr_benefit_model_deployable' condition: does ranking by predicted
+        marginal benefit (chosen and sized entirely on validation data, no
+        oracle or test-label information) actually reduce OFR more than
+        ranking by predicted failure risk under the same fair budget?
+    tier_fraction_benefit : validation-chosen budget fraction for the
+        benefit-model condition (see select_tier_fraction_on_validation()).
 
     Returns
     -------
@@ -467,7 +482,8 @@ def run_allocation_experiment(
     oracle-sized budget), plus, when tier_fraction_deployable is given,
     'ofr_xgb_cal_deployable', 'ofr_gc_dev_deployable', 'ofr_hp_deployable',
     'ofr_composite_deployable', 'ofr_random_deployable' (fair, validation-
-    sized budget) -- each an array of shape (n_runs,).
+    sized budget), plus, when benefit_scores/tier_fraction_benefit are given,
+    'ofr_benefit_model_deployable' -- each an array of shape (n_runs,).
     """
     from mechanism import AllocationMechanism, uniform_allocation, oracle_allocation_greedy_swap
     from baselines import get_baseline_allocations
@@ -504,6 +520,14 @@ def run_allocation_experiment(
             print(f"  [allocation] Deployable budget (validation-chosen): "
                   f"{tier_fraction_deployable:.1%} promoted/demoted")
 
+    # Part B: benefit-aware model deployable condition (fair, its own budget)
+    have_benefit = benefit_scores is not None and tier_fraction_benefit is not None
+    if have_benefit:
+        l_rs_benefit_dep = alloc.allocate(benefit_scores, tier_fraction=tier_fraction_benefit)
+        if verbose:
+            print(f"  [allocation] Benefit-model budget (validation-chosen): "
+                  f"{tier_fraction_benefit:.1%} promoted/demoted")
+
     ofr_uniform   = np.zeros(n_runs)
     ofr_oracle    = np.zeros(n_runs)
     ofr_xgb_cal   = np.zeros(n_runs)
@@ -518,6 +542,8 @@ def run_allocation_experiment(
         ofr_hp_dep        = np.zeros(n_runs)
         ofr_composite_dep = np.zeros(n_runs)
         ofr_random_dep    = np.zeros(n_runs)
+    if have_benefit:
+        ofr_benefit_dep = np.zeros(n_runs)
 
     for run_idx in range(n_runs):
         # One channel clone -> one byte-error array shared by all conditions (R3)
@@ -539,6 +565,9 @@ def run_allocation_experiment(
             ofr_hp_dep[run_idx]        = np.mean(byte_errors > (baseline_allocs_dep['hp']        // 2))
             ofr_composite_dep[run_idx] = np.mean(byte_errors > (baseline_allocs_dep['composite'] // 2))
             ofr_random_dep[run_idx]    = np.mean(byte_errors > (baseline_allocs_dep['random']    // 2))
+
+        if have_benefit:
+            ofr_benefit_dep[run_idx] = np.mean(byte_errors > (l_rs_benefit_dep // 2))
 
         if verbose and (run_idx + 1) % 5 == 0:
             print(f"  [allocation] Run {run_idx+1}/{n_runs} | "
@@ -566,6 +595,11 @@ def run_allocation_experiment(
             'ofr_random_deployable'   : ofr_random_dep,
             'tier_fraction_deployable': np.array([tier_fraction_deployable]),
             'tier_fraction_oracle'    : np.array([tier_fraction]),
+        })
+    if have_benefit:
+        results.update({
+            'ofr_benefit_model_deployable': ofr_benefit_dep,
+            'tier_fraction_benefit'       : np.array([tier_fraction_benefit]),
         })
     return results
 
@@ -697,6 +731,9 @@ def main():
     parser.add_argument('--delta',      type=int, default=2)
     parser.add_argument('--n-runs',     type=int, default=None)
     parser.add_argument('--models-dir', default='models/saved/')
+    parser.add_argument('--benefit-models-dir', default='models/saved_benefit/',
+                         help='Part B benefit-aware models; used only when a '
+                              'matching {key}_delta{delta}_benefit_model.pkl exists.')
     parser.add_argument('--out',        default='results/allocation/')
     args = parser.parse_args()
 
@@ -771,6 +808,32 @@ def main():
     print(f"  [allocation] Validation OFR by candidate tier_fraction: "
           f"{ {k: round(v, 4) for k, v in val_ofr_by_tf.items()} }")
 
+    # Part B: if a benefit-aware model exists for this exact key/delta, give it
+    # the same fair treatment as the risk model -- its own validation-chosen
+    # budget, no oracle or test-label information anywhere in the choice.
+    benefit_model_path = os.path.join(
+        args.benefit_models_dir, f'{args.key}_delta{args.delta}_benefit_model.pkl')
+    benefit_scores = None
+    tier_fraction_benefit = None
+    if os.path.exists(benefit_model_path):
+        import pickle
+        print(f"[allocation] Found benefit-aware model -> {benefit_model_path}")
+        with open(benefit_model_path, 'rb') as f:
+            benefit_model = pickle.load(f)
+        benefit_scores_val = benefit_model.predict(X_val)
+        benefit_scores     = benefit_model.predict(X_te)
+        print(f"[allocation] Selecting benefit-model tier_fraction on validation data ...")
+        tier_fraction_benefit, val_ofr_by_tf_benefit = select_tier_fraction_on_validation(
+            sequences_val, benefit_scores_val, channel, coverage,
+            l_rs_default, args.delta, l_rs_min, l_rs_max,
+            n_runs=n_runs, base_seed=base_seed,
+        )
+        print(f"  [allocation] Validation OFR by candidate tier_fraction (benefit model): "
+              f"{ {k: round(v, 4) for k, v in val_ofr_by_tf_benefit.items()} }")
+    else:
+        print(f"[allocation] No benefit-aware model found for {args.key} delta={args.delta} "
+              f"-- skipping the benefit-model condition.")
+
     os.makedirs(args.out, exist_ok=True)
 
     ofr_results = run_allocation_experiment(
@@ -780,6 +843,8 @@ def main():
         l_rs_min=l_rs_min, l_rs_max=l_rs_max,
         verbose=True,
         tier_fraction_deployable=tier_fraction_deployable,
+        benefit_scores=benefit_scores,
+        tier_fraction_benefit=tier_fraction_benefit,
     )
 
     out_path = os.path.join(args.out, f'{args.key}_delta{args.delta}')
