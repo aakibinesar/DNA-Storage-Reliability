@@ -111,7 +111,7 @@ splits:
 
 # ----- Allocation mechanism -----
 allocation:
-  delta_values: [1, 2, 4]    # parity byte increment options
+  delta_values: [1, 2, 3, 4]    # parity byte increment options
   n_monte_carlo_runs: 30     # independent simulator runs per config (M=30)
   budget_tolerance: 1e-6     # floating-point budget neutrality check
 
