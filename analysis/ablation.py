@@ -11,7 +11,7 @@ Feature groups (5 ablation conditions):
   4. Structural proxies (hairpin, free energy, palindromes)
   5. Positional features (GC first/last quarter, GC constraint violation)
 
-The ablation is run across all 16 dataset configurations to assess which
+The ablation is run across all dataset configurations to assess which
 features are universally important vs. configuration-specific.
 
 Usage:
