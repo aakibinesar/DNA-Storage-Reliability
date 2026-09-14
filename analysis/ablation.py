@@ -9,7 +9,7 @@ Feature groups (5 ablation conditions):
   2. Homopolymer features
   3. GC-based features (global + windowed)
   4. Structural proxies (hairpin, free energy, palindromes)
-  5. Positional features (dist_to_start/end, GC first/last quarter)
+  5. Positional features (GC first/last quarter, GC constraint violation)
 
 The ablation is run across all 16 dataset configurations to assess which
 features are universally important vs. configuration-specific.
@@ -49,7 +49,10 @@ FEATURE_GROUPS = {
         'inverted_repeat',
     ],
     'positional': [
-        'dist_to_start', 'dist_to_end', 'gc_first_quarter', 'gc_last_quarter',
+        # dist_to_start/dist_to_end removed from feature_extractor.py -- they
+        # were hardcoded constants (zero variance) at this project's
+        # per-sequence label granularity, not real positional signal.
+        'gc_first_quarter', 'gc_last_quarter',
         'gc_middle_half', 'gc_constraint_violation',
     ],
 }

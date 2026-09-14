@@ -1,7 +1,7 @@
 """
 feature_extractor.py
 ====================
-Extracts a 51-dimensional feature vector for each DNA sequence.
+Extracts a 76-dimensional feature vector for each DNA sequence.
 
 Feature groups (inspired by REFORM — Reliable Per-Base Error Prediction):
   1. Global composition    — GC ratio, AT ratio, sequence length, molecular weight
@@ -13,8 +13,11 @@ Feature groups (inspired by REFORM — Reliable Per-Base Error Prediction):
                              (normalised), selected 9 via redundancy-penalised selection
   5. Structural proxies    — palindrome count, hairpin propensity score,
                              free-energy approximation, repeat fraction
-  6. Positional/constraint — distance to start, distance to end (centroid-based),
-                             GC-constraint violation score, run-length encoding stats
+  6. Positional/constraint — GC-constraint violation score, run-length encoding
+                             stats, positional GC variation (first/last quartile,
+                             middle half) -- see NOTE in extract_features() re:
+                             dist_to_start/dist_to_end, removed as zero-variance
+                             at this project's per-sequence label granularity
 
 The full pool has ~100 features; the REFORM paper selects k=9 for the lightweight
 framework.  Here we expose the full pool plus a ``select_features`` helper that
@@ -167,8 +170,12 @@ def _extract_single(
     add(_inverted_repeat_count(seq, min_len=4),'inverted_repeat_count')
 
     # --- Group 6: Positional & constraint ------------------------------------
-    add(0.0 / L, 'dist_to_start')   # 0 for sequence-level features (not per-base)
-    add(1.0,     'dist_to_end')     # 1.0 = full sequence
+    # NOTE: dist_to_start/dist_to_end were removed -- at this project's
+    # per-sequence (not per-base) label granularity they were hardcoded
+    # constants (0.0 / 1.0) for every sequence, carrying zero variance and
+    # therefore zero signal. The genuine positional-signal proxies at this
+    # granularity are gc_first_quarter/gc_last_quarter/gc_middle_half and the
+    # homopolymer centroid position below, not a literal start/end distance.
 
     # Constraint violation score: GC out of [0.40, 0.60]
     gc_violation = max(0.0, 0.40 - gc) + max(0.0, gc - 0.60)

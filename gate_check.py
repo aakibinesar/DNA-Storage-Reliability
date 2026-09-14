@@ -9,7 +9,7 @@ split for one dataset configuration and reports the Week 4 go/no-go gate:
 
 Usage:
     python gate_check.py --config configs/experiment_config.yaml \
-        --key sub12_k5_constrained --models-dir models/saved/
+        --key sub20_k5_constrained --models-dir models/saved/
 
 Exit code 0 = PASS, 1 = FAIL, 2 = error (e.g. models not trained yet).
 """
@@ -30,9 +30,12 @@ def main():
     parser = argparse.ArgumentParser(description='Week 4 go/no-go gate check.')
     parser.add_argument('--config', default='configs/experiment_config.yaml')
     parser.add_argument('--key', default=None,
-                         help='Dataset config key. Defaults to the highest '
-                              'substitution rate + primary coverage + constrained '
-                              'encoding (the Rinfinity-P8 12%% condition from the plan).')
+                         help='Dataset config key. Defaults to the highest configured '
+                              'substitution rate + primary coverage + constrained encoding '
+                              '(originally the R-infinity-P8 12%% condition from the plan; '
+                              'now resolves to whatever the highest substitution_rates entry '
+                              'in the config is, currently 20%%, since that list was extended '
+                              'after the plan was written).')
     parser.add_argument('--models-dir', default='models/saved/')
     args = parser.parse_args()
 
@@ -47,9 +50,10 @@ def main():
         sub_max  = max(cfg['channel']['substitution_rates'])
         cov_prim = cfg['coverage_depths'][0]
         args.key = f'sub{int(sub_max*100):02d}_k{cov_prim}_constrained'
-        if args.key not in get_all_config_keys(cfg):
+        all_keys = get_all_config_keys(cfg)
+        if args.key not in all_keys:
             print(f"[gate_check] ERROR: derived key '{args.key}' is not one of the "
-                  f"16 configured datasets. Pass --key explicitly.")
+                  f"{len(all_keys)} configured datasets. Pass --key explicitly.")
             sys.exit(2)
 
     print(f"[gate_check] Gate dataset: {args.key}")
