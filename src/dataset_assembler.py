@@ -1,8 +1,8 @@
 """
 dataset_assembler.py
 ====================
-Generates all 16 dataset configurations and writes them to Parquet files:
-  4 substitution regimes × 2 coverage depths × 2 encoding schemes = 16 configs
+Generates all dataset configurations and writes them to Parquet files:
+  7 substitution regimes × 2 coverage depths × 2 encoding schemes = 28 configs
 
 Each Parquet file contains:
   - dna_sequence       : DNA string
@@ -11,9 +11,14 @@ Each Parquet file contains:
   - label_binary       : hard binary label (threshold at 0.5)
   - <feature columns>  : full feature matrix
 
-Splits (70/15/15 stratified by failure_freq bins) are saved as separate index
-files so that the exact same train/val/test partition is reusable across all
-downstream experiments.
+Splits (70/15/15) are computed ONCE per encoding scheme from sequence identity
+and a fixed seed -- NOT stratified by failure_freq or any other per-condition
+quantity -- and saved as separate index files so every substitution-rate/
+coverage condition under a given encoding shares the exact same train/val/test
+membership. (Stratifying per-condition was the original approach and caused
+cross-config leakage: the same physical sequence could be "seen" in one
+config's training set and "held out" in another's test set. See
+_build_canonical_split() below.)
 
 Usage (CLI):
     python dataset_assembler.py --config configs/experiment_config.yaml
@@ -38,7 +43,7 @@ def _config_key(sub_rate: float, coverage: int, encoding: str) -> str:
 
 
 def build_all_datasets(cfg: dict, verbose: bool = True):
-    """Build all 16 dataset configurations.
+    """Build all dataset configurations.
 
     Generates sequences, runs the channel model, computes labels and features,
     and saves each configuration to a Parquet file.
@@ -260,7 +265,7 @@ def load_dataset(
 
 
 def get_all_config_keys(cfg: dict) -> List[str]:
-    """Return all 16 configuration key strings."""
+    """Return all configuration key strings."""
     sub_rates = cfg['channel']['substitution_rates']
     coverages = cfg['coverage_depths']
     encodings = cfg['sequence']['encoding_schemes']
@@ -274,7 +279,7 @@ def get_all_config_keys(cfg: dict) -> List[str]:
 
 def main():
     parser = argparse.ArgumentParser(
-        description='Build all 16 dataset configurations for the DNA storage benchmark.'
+        description='Build all dataset configurations for the DNA storage benchmark.'
     )
     parser.add_argument('--config', default='configs/experiment_config.yaml')
     parser.add_argument('--verbose', action='store_true', default=True)

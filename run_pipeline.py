@@ -227,7 +227,7 @@ def get_all_keys(cfg):
 def stage_datasets(cfg, args):
     keys = get_all_keys(cfg)
     if not args.force and all_dataset_files_exist(cfg, keys):
-        print("[datasets] All 16 dataset/split files already exist — skipping.")
+        print(f"[datasets] All {len(keys)} dataset/split files already exist — skipping.")
         set_item_status('datasets', state='SKIPPED')
         return 0
     cmd = [sys.executable, '-u', 'src/dataset_assembler.py', '--config', args.config]
