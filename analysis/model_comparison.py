@@ -1,18 +1,20 @@
 """
 analysis/model_comparison.py
 =============================
-Unified comparison of the three trained model tiers -- XGBoost, Random
-Forest, Logistic Regression -- on the same footing: the regime-stratified
-Layer 1 metric suite already used for XGBoost alone in
-`analysis/regime_evaluation.py` (see that module for why aggregate metrics
-over- or under-state genuine model quality).
+Unified comparison of the trained model tiers -- XGBoost, Random Forest,
+Logistic Regression, and (optionally, if --cnn-models-dir is given and
+{key}_cnn.pkl files exist there, see models/train_cnn.py) a small 1D CNN
+over raw sequence -- on the same footing: the regime-stratified Layer 1
+metric suite already used for XGBoost alone in `analysis/regime_evaluation.py`
+(see that module for why aggregate metrics over- or under-state genuine
+model quality).
 
-XGBoost and Random Forest are calibrated regressors on continuous
+XGBoost, Random Forest, and the CNN are calibrated regressors on continuous
 failure_freq; Logistic Regression is a binary majority-fail discriminator
-trained on the binarised label. All three nonetheless produce a probability
+trained on the binarised label. All of them nonetheless produce a probability
 in [0, 1], so `stratified_evaluation` (regime assignment from failure_freq,
-binary labels from failure_freq >= 0.5) applies identically to all three --
-this is what makes the comparison fair rather than apples-to-oranges.
+binary labels from failure_freq >= 0.5) applies identically to all -- this is
+what makes the comparison fair rather than apples-to-oranges.
 
 Outputs
 -------
@@ -49,6 +51,7 @@ MODEL_LABELS = {
     'xgboost': 'XGBoost',
     'random_forest': 'Random Forest',
     'logistic_regression': 'Logistic Regression',
+    'cnn': 'CNN (sequence)',
 }
 
 
@@ -62,8 +65,10 @@ def _lr_predict_proba(lr_model, lr_scaler, X_te: np.ndarray) -> np.ndarray:
         return np.full(X_te.shape[0], 1.0 if classes[0] == 1 else 0.0)
 
 
-def run_model_comparison(cfg: dict, models_dir: str, out_dir: str) -> pd.DataFrame:
-    from dataset_assembler import load_dataset
+def run_model_comparison(
+    cfg: dict, models_dir: str, out_dir: str, cnn_models_dir: str = None,
+) -> pd.DataFrame:
+    from dataset_assembler import load_dataset, load_dataset_sequences
     from train import load_models
     from evaluate import stratified_evaluation
 
@@ -104,6 +109,17 @@ def run_model_comparison(cfg: dict, models_dir: str, out_dir: str) -> pd.DataFra
             probs['random_forest'] = rf_cal.predict_proba(X_te)
         if lr_model is not None and lr_scaler is not None:
             probs['logistic_regression'] = _lr_predict_proba(lr_model, lr_scaler, X_te)
+
+        if cnn_models_dir is not None:
+            cnn_path = os.path.join(cnn_models_dir, f'{key}_cnn.pkl')
+            if os.path.exists(cnn_path):
+                import pickle
+                from train_cnn import one_hot_encode
+                with open(cnn_path, 'rb') as f:
+                    cnn_model = pickle.load(f)
+                _, _, seq_te, _, _, _ = load_dataset_sequences(key, cfg)
+                X_te_onehot = one_hot_encode(seq_te, cfg['sequence']['seq_len_bases'])
+                probs['cnn'] = cnn_model.predict_proba(X_te_onehot)
 
         if not probs:
             print(f"[model_comparison] {key}: no models found — skipping.")
@@ -351,6 +367,8 @@ def main():
     )
     parser.add_argument('--config',     default='configs/experiment_config.yaml')
     parser.add_argument('--models-dir', default='models/saved/')
+    parser.add_argument('--cnn-models-dir', default=None,
+                         help='If given, also score any {key}_cnn.pkl found here as a 4th model.')
     parser.add_argument('--out',        default='results/model_comparison/')
     parser.add_argument('--bootstrap',  action='store_true',
                          help='Also run the RF-vs-XGBoost bootstrap CI comparison.')
@@ -360,7 +378,7 @@ def main():
     with open(args.config) as f:
         cfg = yaml.safe_load(f)
 
-    run_model_comparison(cfg, args.models_dir, args.out)
+    run_model_comparison(cfg, args.models_dir, args.out, args.cnn_models_dir)
 
     if args.bootstrap:
         bootstrap_model_comparison(cfg, args.models_dir, args.out, args.n_bootstrap)

@@ -264,6 +264,40 @@ def load_dataset(
     )
 
 
+def load_dataset_sequences(key: str, cfg: dict) -> Tuple:
+    """Load raw DNA sequences (not the engineered feature matrix) for one
+    dataset config, split with the exact same train/val/test membership
+    `load_dataset` uses -- for models (e.g. a CNN over one-hot sequence)
+    that learn from the sequence directly instead of the ~80 hand-crafted
+    features, while remaining directly comparable to the feature-based
+    models via an identical split.
+
+    Returns
+    -------
+    (seq_train, seq_val, seq_test, y_train, y_val, y_test) -- sequences as
+    lists of strings, labels (failure_freq) as ndarrays.
+    """
+    import pandas as pd
+
+    data_path   = os.path.join(cfg['paths']['datasets_dir'], f'{key}.parquet')
+    splits_path = os.path.join(cfg['paths']['splits_dir'],   f'{key}_splits.parquet')
+
+    df     = pd.read_parquet(data_path)
+    splits = pd.read_parquet(splits_path)
+
+    sequences = df['dna_sequence'].values
+    y         = df['failure_freq'].values
+
+    train_idx = splits[splits['split'] == 'train']['index'].values
+    val_idx   = splits[splits['split'] == 'val'  ]['index'].values
+    test_idx  = splits[splits['split'] == 'test' ]['index'].values
+
+    return (
+        list(sequences[train_idx]), list(sequences[val_idx]), list(sequences[test_idx]),
+        y[train_idx], y[val_idx], y[test_idx],
+    )
+
+
 def get_all_config_keys(cfg: dict) -> List[str]:
     """Return all configuration key strings."""
     sub_rates = cfg['channel']['substitution_rates']
