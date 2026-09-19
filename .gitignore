@@ -1,5 +1,4 @@
 # Pipeline outputs
-data/
 results/allocation/
 logs/
 pipeline.log
