@@ -1,2 +1,0 @@
-n_bootstrap,n_info_sequences,regime_lo,regime_hi,top_k,stable_rank_std_thr,mean_tau,std_tau,ci95_lo,ci95_hi,n_stable_features,frac_stable_features
-200,193,0.150000,0.850000,10,3.000000,0.952559,0.007703,0.937120,0.966870,66,0.846154
