@@ -1,11 +1,15 @@
 #!/bin/bash
 # scratch_rerun_stale_stages.sh
 #
-# Driver for regenerating the datasets/models at n=10000 and rerunning the
-# 9 analysis stages that commit 0c188c6 deleted as stale n=2000-era output
+# Driver for finishing the n=10000 refresh: datasets/splits and benefit-aware
+# models were already regenerated locally and pushed (commit f528685), so
+# this script retrains the classical risk models (the one remaining gap),
+# reruns the allocation experiments + significance testing + benefit-model
+# validation (also stale since 0c188c6 never re-ran them), and reruns the 9
+# analysis stages that commit 0c188c6 deleted as stale n=2000-era output
 # (ablation, threshold_sensitivity, calibration_regimes, shap_stability,
 # channel_ablation, regime_evaluation, distribution_shift, transfer_radius,
-# encoding_confound), pending a rerun that never happened.
+# encoding_confound).
 #
 # Designed to be started once with nohup/setsid and left alone: every phase
 # commits+pushes its results immediately on completion, so progress survives
@@ -67,6 +71,32 @@ log "train rc=$rc"
 mark "risk models retrained at n=10000 (rc=$rc)"
 commit_push "Stale rerun: risk models retrained at n=10000"
 if [ "$rc" != "0" ]; then log "ABORT: train phase failed"; exit 1; fi
+
+log "=== PHASE allocation (112 key x delta experiments) ==="
+python3 -u scratch_parallel_allocation.py --workers "$WORKERS" --deltas 1,2,3,4 \
+    >> logs/_phase_allocation.log 2>&1
+rc=$?
+log "allocation rc=$rc"
+mark "allocation experiments (112 runs) rerun at n=10000 (rc=$rc)"
+commit_push "Stale rerun: allocation experiments rerun at n=10000"
+
+log "=== PHASE allocation_significance ==="
+python3 -u allocation/significance.py --results-dir results/allocation/ \
+    --out results/allocation_significance \
+    >> logs/_phase_allocation_significance.log 2>&1
+rc=$?
+mark "allocation_significance rerun at n=10000 (rc=$rc)"
+commit_push "Stale rerun: allocation_significance refreshed at n=10000"
+
+log "=== PHASE benefit_model_validation ==="
+python3 -u analysis/validate_benefit_model.py --config configs/experiment_config.yaml \
+    --delta 2 --workers "$WORKERS" --out results/benefit_model_validation \
+    >> logs/_phase_benefit_model_validation.log 2>&1
+python3 -u analysis/validate_benefit_model.py --config configs/experiment_config.yaml \
+    --delta 4 --workers "$WORKERS" --out results/benefit_model_validation_delta4 \
+    >> logs/_phase_benefit_model_validation.log 2>&1
+mark "benefit_model_validation (delta 2, 4) rerun at n=10000"
+commit_push "Stale rerun: benefit_model_validation refreshed at n=10000"
 
 for stage in ablation threshold_sensitivity calibration_regimes shap_stability channel_ablation; do
     log "=== PHASE $stage ==="
