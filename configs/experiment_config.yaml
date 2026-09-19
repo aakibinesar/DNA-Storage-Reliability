@@ -8,7 +8,7 @@ random_seed: 42
 
 # ----- Sequence generation -----
 sequence:
-  n_sequences: 2000          # sequences per configuration
+  n_sequences: 10000         # sequences per configuration (raised 5x from 2000 to address class-imbalance in the informative regime for borderline configs)
   data_bytes: 17             # bytes of actual payload per oligo
   l_rs_default: 8            # default RS parity bytes (correction capacity = 4 byte errors)
   seq_len_bases: 100         # total bases per oligo (data + parity, no primers here)
