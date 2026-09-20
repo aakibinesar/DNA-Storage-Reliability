@@ -16,3 +16,4 @@
 - [x] calibration_regimes rerun at n=10000 (rc=1) -- 2026-09-20T00:08:55Z
 - [x] shap_stability rerun at n=10000 (rc=1) -- 2026-09-20T00:08:56Z
 - [x] channel_ablation rerun at n=10000 (rc=1) -- 2026-09-20T00:08:58Z
+- [x] regime_evaluation rerun at n=10000 (rc=0) -- 2026-09-20T00:09:04Z
