@@ -67,6 +67,24 @@ def get_all_keys(cfg):
     ]
 
 
+def run_one(args_tuple):
+    """Module-level (not nested in main()) so it can be pickled by
+    multiprocessing.Pool -- a local/nested function breaks
+    Pool.imap_unordered at task-submission time (see scratch_parallel_train.py,
+    which documents this same fix)."""
+    key, stage, script, out_dir, needs_models_dir, config_path, models_dir = args_tuple
+    t0 = time.time()
+    os.makedirs('logs', exist_ok=True)
+    log_path = f'logs/{stage}_{key}.log'
+    cmd = [sys.executable, '-u', script,
+           '--config', config_path, '--key', key, '--out', out_dir]
+    if needs_models_dir:
+        cmd += ['--models-dir', models_dir]
+    with open(log_path, 'w') as logf:
+        rc = subprocess.call(cmd, stdout=logf, stderr=subprocess.STDOUT)
+    return key, rc, round(time.time() - t0, 1)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('stage', choices=list(STAGES.keys()))
@@ -89,26 +107,17 @@ def main():
     keys = [k for k in all_keys if not already_done(k)]
     print(f"[{args.stage}] {len(all_keys) - len(keys)} already done, {len(keys)} remaining")
 
-    def run_one(key):
-        t0 = time.time()
-        os.makedirs('logs', exist_ok=True)
-        log_path = f'logs/{args.stage}_{key}.log'
-        cmd = [sys.executable, '-u', spec['script'],
-               '--config', args.config, '--key', key, '--out', spec['out']]
-        if spec['needs_models_dir']:
-            cmd += ['--models-dir', args.models_dir]
-        with open(log_path, 'w') as logf:
-            rc = subprocess.call(cmd, stdout=logf, stderr=subprocess.STDOUT)
-        return key, rc, round(time.time() - t0, 1)
-
     if not keys:
         print(f"[{args.stage}] nothing to do")
         return
 
+    tasks = [(k, args.stage, spec['script'], spec['out'], spec['needs_models_dir'],
+              args.config, args.models_dir) for k in keys]
+
     t_start = time.time()
     n_done = 0
     with Pool(processes=args.workers) as pool:
-        for key, rc, elapsed in pool.imap_unordered(run_one, keys):
+        for key, rc, elapsed in pool.imap_unordered(run_one, tasks):
             n_done += 1
             status = 'OK' if rc == 0 else f'FAIL(rc={rc})'
             print(f"  [{n_done}/{len(keys)}] {key}: {status}  [{elapsed}s]")
