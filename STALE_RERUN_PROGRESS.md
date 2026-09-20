@@ -18,3 +18,4 @@
 - [x] channel_ablation rerun at n=10000 (rc=1) -- 2026-09-20T00:08:58Z
 - [x] regime_evaluation rerun at n=10000 (rc=0) -- 2026-09-20T00:09:04Z
 - [x] distribution_shift rerun at n=10000 -- 2026-09-20T00:09:19Z
+- [x] transfer_radius rerun at n=10000 -- 2026-09-20T00:09:32Z
