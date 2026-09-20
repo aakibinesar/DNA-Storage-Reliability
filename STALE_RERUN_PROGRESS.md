@@ -23,3 +23,4 @@
 - [x] figures regenerated from refreshed n=10000 results -- 2026-09-20T00:10:06Z
 ALL_DONE 2026-09-20T00:10:08Z
 - [x] ablation rerun with fixed script at n=10000 (rc=0, 28 files) -- 2026-09-20T00:11:30Z
+- [x] threshold_sensitivity rerun with fixed script at n=10000 (rc=0, 56 files) -- 2026-09-20T00:11:44Z
