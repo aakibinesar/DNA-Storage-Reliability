@@ -28,3 +28,4 @@ ALL_DONE 2026-09-20T00:10:08Z
 - [x] shap_stability rerun with fixed script at n=10000 (rc=0, 40 files) -- 2026-09-20T00:18:33Z
 - [x] channel_ablation rerun with fixed script at n=10000 (rc=0, 28 files) -- 2026-09-20T00:45:08Z
 - [x] figures regenerated after 5-stage fixup -- 2026-09-20T00:45:26Z
+FIXUP_DONE 2026-09-20T00:45:28Z
