@@ -8,15 +8,24 @@ Calibrated sequence-level failure prediction and adaptive redundancy allocation 
 
 DNA data storage encodes digital information into synthetic DNA oligonucleotides. Errors introduced during synthesis, PCR amplification, storage decay, and sequencing can cause Reed-Solomon (RS) error correction to fail — resulting in data loss.
 
-Current practice allocates the same number of RS parity bytes to every oligo, regardless of how error-prone its sequence is. This project proposes a machine learning approach: **predict which oligos are likely to fail, then adaptively reallocate parity bytes from safe sequences to risky ones**, keeping the total storage budget neutral.
+Current practice allocates the same number of RS parity bytes to every oligo, regardless of how error-prone its sequence is. This project investigates a machine learning approach: **predict which oligos are likely to fail, then adaptively reallocate parity bytes from safe sequences to risky ones**, keeping the total storage budget neutral — and, just as importantly, rigorously characterizes *where that approach actually works and where it doesn't*, rather than assuming it works everywhere it's tried.
 
-The pipeline covers the full experimental workflow:
+The pipeline covers the full experimental workflow, at n=10,000 sequences × 28 configurations (7 substitution rates × 2 coverage depths × 2 encoding schemes):
 - Synthetic DNA channel simulation (DeSP-inspired Monte Carlo model)
 - Feature extraction from raw sequence composition
-- Calibrated ML model training (XGBoost, Random Forest, Logistic Regression)
-- Adaptive redundancy allocation vs. uniform and oracle baselines
-- Feature ablation and distribution shift robustness analysis
+- Calibrated ML model training (XGBoost, Random Forest, Logistic Regression, and a 1D CNN over raw sequence as a feature-engineering-free comparison point)
+- A benefit-aware model (Part B) trained to predict marginal benefit of added parity directly, rather than raw failure risk
+- Adaptive redundancy allocation vs. uniform, oracle, and rule-based baselines (112 config × Δ combinations)
+- Feature ablation, calibration, cross-substitution-rate transfer, and distribution-shift robustness analysis
 - Paper-ready figure generation
+
+**Headline findings**, stated as plainly as the results support:
+- **Real, trustworthy classification signal exists in roughly a third of all configurations (9/28)** — not broadly, and not uniformly. That ceiling is a property of the data regime, confirmed by a 1D CNN with direct access to raw sequence performing *no better* (and on the two weakest configs, measurably worse) than models trained on ~80 hand-crafted composition features.
+- **Which third is informative depends on coverage, not just substitution rate**: the informative substitution-rate band shifts to higher noise levels as coverage increases (K=3: ~5–15%, K=5: ~15–20%) — a concrete, mechanistically-grounded rule for deciding when a given deployment is worth modeling at all (see Practical Deployment Guidance below).
+- **Models do not transfer across substitution rates without retraining** — formal transfer radius is 0.000 in every stratum tested, on a leak-free split.
+- **A raw failure-risk classifier is the wrong tool for the reallocation decision itself** — it is essentially uncorrelated with true marginal benefit of added parity (Spearman ≈ −0.02 to −0.05). A benefit-aware model trained on the right target closes much of that gap, but the resulting allocation improvement is real, modest, and delta-dependent, not a uniform win: only 26 of 112 config×delta combinations beat uniform allocation at statistical significance, with Δ=2 the clear best default and Δ=1/Δ=3 actively harmful by construction (see Delta as a Leverage Dial below).
+
+This project treats those as the actual contribution — a rigorously audited (see Fixed Issues below), statistically honest characterization of when ML-based reliability prediction helps in DNA storage and when it doesn't — rather than as caveats on top of a headline predictor.
 
 ---
 
