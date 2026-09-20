@@ -165,6 +165,35 @@ python run_pipeline.py --status
 | `channel_ablation` | Model robustness under ablated channel-noise variants |
 | `figures` | Generate all paper figures |
 
+### Beyond `run_pipeline.py`: Part B, CNN, and Diagnostics
+
+The benefit-aware model, the CNN, and a few diagnostic scripts are not wired into `run_pipeline.py`'s stage registry — they're run directly, one config (and for the benefit model, one delta) at a time:
+
+```bash
+# Part B: benefit-aware model, one config/delta at a time
+python models/train_benefit_model.py --key sub09_k3_simple --delta 2 --out models/saved_benefit/
+
+# 1D CNN, one config at a time
+python models/train_cnn.py --key sub09_k3_simple --out models/saved_cnn/
+
+# Diagnostics (run after the models above exist)
+python allocation/significance.py                          # -> results/allocation_significance/
+python analysis/risk_marginal_benefit_correlation.py --out results/risk_marginal_benefit_correlation_paired/
+python analysis/validate_benefit_model.py                   # -> results/benefit_model_validation/
+```
+
+For the full 28-config (or 28×4-delta) sweep, use the `scratch_parallel_*.py` launchers instead of looping the above by hand — they're resumable (skip any `(key[, delta])` whose output file already exists) and run several configs in parallel as OS subprocesses, pinned to one thread each to avoid oversubscribing a small machine's cores:
+
+```bash
+python scratch_parallel_train.py     --workers 6                    # classical models, 28 configs
+python scratch_parallel_benefit.py   --workers 6 --deltas 2,3,4      # benefit-aware models, 84 jobs
+python scratch_train_cnn_all.py                                     # CNN, 28 configs, sequential (single GPU)
+python scratch_parallel_allocation.py --workers 6 --deltas 1,2,3,4   # allocation experiments, 112 jobs
+python scratch_parallel_stage.py ablation --workers 6               # any per-key analysis stage, 28 configs
+```
+
+`analysis/model_comparison.py --cnn-models-dir models/saved_cnn/ --bootstrap` (run after both classical and CNN models exist) produces the CNN-inclusive comparison in Model Comparison / Sequence-Level Model above; without `--cnn-models-dir` it falls back to the classical-only comparison that `run_pipeline.py`'s `model_comparison` stage runs.
+
 ---
 
 ## Results
@@ -173,13 +202,19 @@ After the full pipeline completes:
 
 ```
 results/
-├── allocation/             # 112 NPZ files — OFR arrays (30 MC runs each)
+├── allocation/             # 112 NPZ files — OFR arrays (30 MC runs each), risk + benefit-aware conditions
+├── allocation_significance/ # paired Wilcoxon significance, BH-FDR corrected, all 112 combos x both models
+├── benefit_labels/         # 84 NPZ files — kernel-smoothed marginal-benefit training labels (Part B)
+├── benefit_model_validation/ # benefit vs. risk model, scored on true test-set marginal benefit (delta=2)
+├── benefit_model_validation_delta4/ # same, at delta=4
+├── risk_marginal_benefit_correlation_paired/ # current (paired-oracle) risk-vs-true-benefit correlation
+├── class_balance/          # per-config min_class_n / fail_rate / mean_freq breakdown (n=10000)
 ├── ablation/               # 28 CSVs — per-group metric deltas
 ├── distribution_shift/     # 8 CSVs  — 12-condition transfer sweep + per-stratum radius summary
 ├── transfer_radius/        # formal all-pairs transfer radius (regime-aware AUROC)
 ├── calibration_regimes/    # per-config regime-stratified ECE/Brier with bootstrap CIs
 ├── regime_evaluation/      # full Layer 1 metrics per config per regime
-├── model_comparison/       # XGBoost vs. RF vs. Logistic Regression, same metric suite
+├── model_comparison/       # XGBoost vs. RF vs. Logistic Regression vs. CNN, same metric suite
 ├── threshold_sensitivity/  # decision-threshold sweep + near-threshold label noise
 ├── shap_stability/         # bootstrap SHAP feature-importance stability
 ├── encoding_confound/      # deconfounded simple-vs-constrained encoding comparison
@@ -193,6 +228,8 @@ results/
     ├── fig_s1_feature_distributions.png
     └── fig_s4_cost_reliability.png
 ```
+
+(`results/risk_marginal_benefit_correlation/`, without `_paired`, is a stale pre-n=10000, pre-paired-oracle-fix leftover — not regenerated since the fix in Fixed Issues below; use the `_paired` directory.)
 
 **Key metric — Oligo Failure Rate (OFR)**: fraction of oligos that fail RS decoding after allocation, at the same total parity budget across conditions (uniform / oracle / model / rule-based baselines).
 
