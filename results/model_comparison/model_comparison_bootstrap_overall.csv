@@ -1,2 +1,2 @@
 n_configs,n_bootstrap,mean_diff_rf_minus_xgb,ci_95_lo,ci_95_hi,ci_excludes_zero,frac_bootstraps_rf_better
-11,2000,0.002092,-0.002596,0.007131,False,0.809000
+11,2000,0.003665,-0.001862,0.009413,False,0.913000
