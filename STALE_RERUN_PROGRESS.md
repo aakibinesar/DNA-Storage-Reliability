@@ -26,3 +26,4 @@ ALL_DONE 2026-09-20T00:10:08Z
 - [x] threshold_sensitivity rerun with fixed script at n=10000 (rc=0, 56 files) -- 2026-09-20T00:11:44Z
 - [x] calibration_regimes rerun with fixed script at n=10000 (rc=0, 56 files) -- 2026-09-20T00:11:58Z
 - [x] shap_stability rerun with fixed script at n=10000 (rc=0, 40 files) -- 2026-09-20T00:18:33Z
+- [x] channel_ablation rerun with fixed script at n=10000 (rc=0, 28 files) -- 2026-09-20T00:45:08Z
