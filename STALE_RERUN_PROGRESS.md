@@ -21,3 +21,4 @@
 - [x] transfer_radius rerun at n=10000 -- 2026-09-20T00:09:32Z
 - [x] encoding_confound rerun at n=10000 -- 2026-09-20T00:09:35Z
 - [x] figures regenerated from refreshed n=10000 results -- 2026-09-20T00:10:06Z
+ALL_DONE 2026-09-20T00:10:08Z
