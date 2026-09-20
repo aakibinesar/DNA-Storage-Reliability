@@ -1,0 +1,5 @@
+regime,n,frac_total,class_prevalence,mean_ff,ece,ece_ci_lo,ece_ci_hi,brier,brier_ci_lo,brier_ci_hi
+under_failure,1500,1.000000,0.000000,0.000133,0.000000,0.000000,0.000133,0.000006,0.000001,0.000013
+informative,0,0.000000,,,,,,,,
+saturated,0,0.000000,,,,,,,,
+aggregate,1500,1.000000,0.000000,0.000133,0.000000,0.000000,0.000133,0.000006,0.000001,0.000013
