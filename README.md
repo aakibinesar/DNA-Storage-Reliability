@@ -349,6 +349,25 @@ Models are trained on one substitution regime and evaluated on another **without
 
 **Models do not transfer across substitution rates without retraining** — the transfer radius is 0.000 in every stratum and direction tested, failing even at the smallest tested step (2%). This is now measured on a leak-free canonical split (no sequence is ever shared between a source config's training set and a target config's "unseen" test set — see Fixed Issues below), so it's a clean test of generalization to genuinely unseen sequences, not just unseen substitution rates. See `results/transfer_radius/` for the full all-pairs sweep and `results/distribution_shift/` for the 12-condition per-stratum breakdown.
 
+### Practical Deployment Guidance: K=3 vs. K=5
+
+The findings above are scattered across several sections; this pulls them into one answer to "given a real deployment at some coverage depth, what should it actually do?"
+
+**1. Only model within the informative substitution-rate band for your coverage depth, and that band depends on coverage:**
+
+| Coverage | Model when substitution rate is... | Otherwise |
+|---|---|---|
+| K=3 (stress) | ~5%–15% | Below: uniform allocation is already sufficient. Above (~18%+): failure is near-universal regardless of allocation — modeling has nothing to act on. |
+| K=5 (robust) | ~15%–20% | Below (~12%-): failure rate is near-zero — modeling has nothing to act on. Above: untested at this coverage; extrapolate cautiously. |
+
+This is a direct consequence of the coverage/substitution-rate shift above (Failure Regime Map): more redundant coverage needs proportionally more channel noise before there's failure-rate variability worth predicting at all. Don't reuse a K=3 deployment threshold at K=5, or vice versa.
+
+**2. Within that band, prefer Δ=2 over every other tested reallocation step size.** Δ=1 makes no capacity difference on promotion by construction (see Delta as a Leverage Dial) and is a wasted reallocation. Δ=3 is structurally dominated by Δ=2 — same promotion upside, strictly worse demotion downside — and was the single worst-performing setting tested (significantly worse than uniform in 24/28 configs for the benefit-aware model). Δ=4 trades a larger correct-decision payoff for a larger incorrect-decision penalty in the same direction as Δ=3's problem, just less severely; only reach for it if Δ=2's capacity swing (±1) is known to be insufficient for the deployment's target reliability.
+
+**3. Use the benefit-aware model (Part B), not the raw failure-risk classifier, for the allocation decision itself.** The risk classifier discriminates *failure probability* well but is essentially uncorrelated with *marginal benefit of added parity* (mean Spearman ≈ −0.02 to −0.05 depending on Δ) — the quantity a reallocation decision actually needs. The benefit-aware model closes much of that gap. Keep the risk classifier for what it's good at: informative-regime characterization, calibration reporting, and deciding *whether* a config is worth modeling at all (steps 1–2 above).
+
+**4. Set expectations honestly even inside this recommended envelope.** Meeting all three conditions above does not guarantee a significant win: across all 112 config×delta combinations, only 26 are *significantly* better than uniform under a proper paired test (vs. 55 significantly worse) — and that 26 is concentrated in, not synonymous with, the region this guidance narrows you down to. Treat this as "here is where it is *worth checking* whether modeling helps for your specific deployment," not "here is where modeling is guaranteed to help." Validate per-deployment with `allocation/significance.py` before trusting the model in production.
+
 ### Known Limitations
 
 - **Encoding comparison is largely confounded.** A raw comparison of simple vs. constrained encoding shows constrained encoding failing less often, but post-stratifying on GC content and homopolymer run length (the `encoding_confound` stage) shows most of that raw effect disappears or reverses once composition is controlled for — see `results/encoding_confound/`.
