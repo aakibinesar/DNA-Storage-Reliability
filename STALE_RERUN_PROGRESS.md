@@ -10,3 +10,4 @@
 - [x] risk models retrained at n=10000 (rc=0) -- 2026-09-19T20:23:37Z
 - [x] allocation experiments (112 runs) rerun at n=10000 (rc=0) -- 2026-09-19T23:42:17Z
 - [x] allocation_significance rerun at n=10000 (rc=0) -- 2026-09-19T23:42:20Z
+- [x] benefit_model_validation (delta 2, 4) rerun at n=10000 -- 2026-09-20T00:08:49Z
