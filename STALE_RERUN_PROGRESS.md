@@ -13,3 +13,4 @@
 - [x] benefit_model_validation (delta 2, 4) rerun at n=10000 -- 2026-09-20T00:08:49Z
 - [x] ablation rerun at n=10000 (rc=1) -- 2026-09-20T00:08:51Z
 - [x] threshold_sensitivity rerun at n=10000 (rc=1) -- 2026-09-20T00:08:53Z
+- [x] calibration_regimes rerun at n=10000 (rc=1) -- 2026-09-20T00:08:55Z
