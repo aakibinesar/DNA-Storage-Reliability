@@ -56,6 +56,7 @@ Across the 28 configurations, three distinct regimes emerge:
 ├── models/
 │   ├── train.py                  # XGBoost / RF / LR training with grid search
 │   ├── train_benefit_model.py    # Part B: benefit-aware model (predicts marginal benefit, not failure risk)
+│   ├── train_cnn.py              # 1D CNN on raw one-hot sequence, same split/calibration discipline
 │   ├── calibrate.py              # Platt scaling, isotonic regression, temperature scaling
 │   └── evaluate.py               # ECE, Brier score, PR-AUC, AUROC
 ├── allocation/
@@ -68,7 +69,7 @@ Across the 28 configurations, three distinct regimes emerge:
 │   ├── threshold_sensitivity.py  # Decision-threshold sweep, near-threshold label noise
 │   ├── calibration_regimes.py    # Regime-stratified calibration with bootstrap CIs
 │   ├── regime_evaluation.py      # Full Layer 1 metrics per regime, all configs
-│   ├── model_comparison.py       # XGBoost vs. Random Forest vs. Logistic Regression, same metric suite
+│   ├── model_comparison.py       # XGBoost vs. Random Forest vs. Logistic Regression vs. CNN, same metric suite
 │   ├── distribution_shift.py     # Cross-regime transfer experiments
 │   ├── transfer_radius.py        # Formal all-pairs transfer radius (regime-aware AUROC)
 │   ├── shap_stability.py         # Bootstrap SHAP feature-importance stability
@@ -310,6 +311,28 @@ XGBoost is the primary model used everywhere above, but all three tiers are trai
 **Logistic Regression is clearly worse on every metric** — expected, since it is a linear discriminator forced onto the majority-fail binary label while the other two regress directly on the continuous failure frequency, and the informative regime is exactly where a linear decision boundary is least likely to hold.
 
 **Practical takeaway**: XGBoost remains a reasonable default (it's the model wired through calibration, allocation, and SHAP analysis throughout this project), but Random Forest is a legitimate, currently under-exploited alternative worth calibration attention in any follow-up work — the two are statistically tied on the metric that actually drives allocation quality (ranking), and RF's calibration numbers are better out of the box. More importantly: **real, trustworthy classification signal exists in only about a third of all 28 configurations** (9/28 with genuine discrimination, 2/28 confirmed weak, 17/28 with no informative regime or too little of one class to say anything). That ceiling — not model choice among XGBoost/RF/LR — is the binding constraint on this part of the pipeline, and the manuscript should say so plainly rather than lead with an encouraging-looking headline figure. See `results/model_comparison/` for the full per-config, per-regime breakdown.
+
+### Sequence-Level Model: 1D CNN vs. Hand-Crafted Features
+
+The three models above all learn from the same ~80 hand-crafted sequence-composition features (GC content, homopolymer runs, dinucleotide/trinucleotide frequencies, etc.). A natural question: is the informative-regime ceiling above (real signal in about a third of configs, and even there only modest AUROC) a property of the *data*, or an artifact of what those hand-crafted features happen to capture? If a model with direct access to raw sequence — no feature engineering, no domain assumptions — could do meaningfully better, the features would be the bottleneck, not the underlying reliability signal.
+
+`models/train_cnn.py` trains a small 1D CNN directly on one-hot-encoded sequence (same train/val/test split, same HP-search/early-stopping/calibration discipline as the classical models) for all 28 configs. The answer is no — the CNN does not outperform the feature-based models on any usable config:
+
+| Model | Usable configs | Mean AUROC | Median AUROC | Mean F1 | Mean ECE | Mean Brier |
+|---|---|---|---|---|---|---|
+| CNN (raw sequence) | 11 / 28 | 0.776 | 0.821 | 0.457 | 0.080 | 0.029 |
+| XGBoost | 11 / 28 | 0.864 | 0.912 | 0.660 | 0.025 | 0.007 |
+| Random Forest | 11 / 28 | 0.867 | 0.928 | 0.670 | 0.025 | 0.007 |
+| Logistic Regression | 11 / 28 | 0.808 | 0.842 | 0.579 | 0.202 | 0.065 |
+
+**The CNN wins best-AUROC on 0 of the 11 usable configs**, and its aggregate mean is pulled down specifically by the two weakest configs from the section above — exactly where a "the features are hiding something" result would have been most interesting:
+
+| Config | XGBoost | Random Forest | Logistic Regression | CNN |
+|---|---|---|---|---|
+| `sub15_k3_simple` | 0.605 | 0.608 | 0.623 | **0.555** |
+| `sub15_k3_constrained` | 0.572 | 0.569 | 0.562 | **0.505** |
+
+`sub15_k3_constrained`'s CNN AUROC (0.505) is indistinguishable from chance. This strengthens rather than undermines the Model Comparison finding above: the weak discrimination in these two configs reflects a genuine ceiling on the *learnable signal in this data regime*, not a limitation of the hand-crafted feature representation — a model with strictly more raw information (the full sequence, not a ~80-dimensional summary of it) does no better, and on the hardest configs does noticeably worse. This is unsurprising in context: the hand-crafted features are physically motivated (they encode exactly the composition properties known to drive synthesis/sequencing errors), and a CNN has to rediscover that structure from ~7,000 training sequences per config with no prior — a small-data regime where domain-informed features routinely beat raw-input deep learning. See `results/model_comparison/model_comparison_all.csv` (`model == 'cnn'` rows) for the full per-config breakdown.
 
 ### Distribution Shift / Transfer Radius Results
 
