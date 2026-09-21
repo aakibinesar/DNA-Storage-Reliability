@@ -20,7 +20,7 @@ The pipeline covers the full experimental workflow, at n=10,000 sequences × 28 
 - Paper-ready figure generation
 
 **Headline findings**, stated as plainly as the results support:
-- **Real, trustworthy classification signal exists in roughly a third of all configurations (9/28)** — not broadly, and not uniformly. That ceiling is a property of the data regime, confirmed by a 1D CNN with direct access to raw sequence performing *no better* (and on the two weakest configs, measurably worse) than models trained on ~80 hand-crafted composition features.
+- **Real, trustworthy classification signal exists in roughly a third of all configurations (9/28)** — not broadly, and not uniformly. That ceiling is a property of the data regime, confirmed by two 1D CNN architectures (a small one, and a 4x-larger one with attention pooling — same result either way) with direct access to raw sequence performing *no better* (and on the two weakest configs, measurably worse) than models trained on ~80 hand-crafted composition features.
 - **Which third is informative depends on coverage, not just substitution rate**: the informative substitution-rate band shifts to higher noise levels as coverage increases (K=3: ~5–15%, K=5: ~15–20%) — a concrete, mechanistically-grounded rule for deciding when a given deployment is worth modeling at all (see Practical Deployment Guidance below).
 - **Models do not transfer across substitution rates without retraining** — formal transfer radius is 0.000 in every stratum tested, on a leak-free split.
 - **A raw failure-risk classifier is the wrong tool for the reallocation decision itself** — it is essentially uncorrelated with true marginal benefit of added parity (Spearman ≈ −0.02 to −0.05). A benefit-aware model trained on the right target closes much of that gap, but the resulting allocation improvement is real, modest, and delta-dependent, not a uniform win: only 26 of 112 config×delta combinations beat uniform allocation at statistical significance, with Δ=2 the clear best default and Δ=1/Δ=3 actively harmful by construction (see Delta as a Leverage Dial below).
@@ -68,6 +68,7 @@ Across the 28 configurations, three distinct regimes emerge:
 │   ├── train.py                  # XGBoost / RF / LR training with grid search
 │   ├── train_benefit_model.py    # Part B: benefit-aware model (predicts marginal benefit, not failure risk)
 │   ├── train_cnn.py              # 1D CNN on raw one-hot sequence, same split/calibration discipline
+│   ├── train_cnn_v2.py           # BigCNN: deeper/attention-pooling variant, robustness check on the CNN result
 │   ├── calibrate.py              # Platt scaling, isotonic regression, temperature scaling
 │   └── evaluate.py               # ECE, Brier score, PR-AUC, AUROC
 ├── allocation/
@@ -188,6 +189,7 @@ For the full 28-config (or 28×4-delta) sweep, use the `scratch_parallel_*.py` l
 python scratch_parallel_train.py     --workers 6                    # classical models, 28 configs
 python scratch_parallel_benefit.py   --workers 6 --deltas 2,3,4      # benefit-aware models, 84 jobs
 python scratch_train_cnn_all.py                                     # CNN, 28 configs, sequential (single GPU)
+python scratch_train_cnn_v2_all.py                                  # BigCNN, 28 configs, sequential (single GPU)
 python scratch_parallel_allocation.py --workers 6 --deltas 1,2,3,4   # allocation experiments, 112 jobs
 python scratch_parallel_stage.py ablation --workers 6               # any per-key analysis stage, 28 configs
 ```
@@ -381,6 +383,17 @@ The three models above all learn from the same ~80 hand-crafted sequence-composi
 | `sub15_k3_constrained` | 0.572 | 0.569 | 0.562 | **0.505** |
 
 `sub15_k3_constrained`'s CNN AUROC (0.505) is indistinguishable from chance. This strengthens rather than undermines the Model Comparison finding above: the weak discrimination in these two configs reflects a genuine ceiling on the *learnable signal in this data regime*, not a limitation of the hand-crafted feature representation — a model with strictly more raw information (the full sequence, not a ~80-dimensional summary of it) does no better, and on the hardest configs does noticeably worse. This is unsurprising in context: the hand-crafted features are physically motivated (they encode exactly the composition properties known to drive synthesis/sequencing errors), and a CNN has to rediscover that structure from ~7,000 training sequences per config with no prior — a small-data regime where domain-informed features routinely beat raw-input deep learning. See `results/model_comparison/model_comparison_all.csv` (`model == 'cnn'` rows) for the full per-config breakdown.
+
+**Robustness check: is this a capacity/architecture artifact, or does it survive a meaningfully bigger model?** A single CNN losing is the kind of result a reviewer reflexively attributes to "not tuned enough." `models/train_cnn_v2.py` trains a second, deliberately different architecture (`BigCNN`) for all 28 configs — 4 conv layers instead of 2, batch normalization, dilated convolutions for a much larger effective receptive field, and learned attention pooling instead of a plain average — roughly an order of magnitude more parameters than the original CNN:
+
+| Model | Usable configs | Mean AUROC | Median AUROC | Mean F1 | Mean ECE | Mean Brier |
+|---|---|---|---|---|---|---|
+| CNN (small, 2-layer) | 11 / 28 | 0.776 | 0.821 | 0.457 | 0.080 | 0.029 |
+| BigCNN (4-layer, dilated, attention) | 11 / 28 | 0.780 | 0.813 | 0.453 | 0.074 | 0.028 |
+| XGBoost | 11 / 28 | 0.864 | 0.912 | 0.660 | 0.025 | 0.007 |
+| Random Forest | 11 / 28 | 0.867 | 0.928 | 0.670 | 0.025 | 0.007 |
+
+**The result survives.** BigCNN's mean AUROC (0.780) is statistically indistinguishable from the small CNN's (0.776) — a 4x-deeper, attention-based model with an order of magnitude more capacity moves the aggregate by +0.004, and still wins best-AUROC on 0 of the 11 usable configs. Config-by-config, BigCNN is a mixed bag relative to the small CNN (better on 6, worse on 5, roughly ±0.01–0.05 AUROC either way) — not a consistent improvement, closer to noise around the same ceiling. On the two hardest target configs specifically: `sub15_k3_simple` is essentially flat (0.555 → 0.556), and `sub15_k3_constrained` moves off exact chance (0.505 → 0.558) but *still remains below every classical model* on that config (XGBoost 0.572, RF 0.569). **The negative CNN result is not an artifact of an undersized first attempt** — a meaningfully different, substantially larger architecture lands in the same place. See `results/model_comparison/model_comparison_all.csv` (`model == 'cnn_v2'` rows) for the full per-config breakdown.
 
 ### Distribution Shift / Transfer Radius Results
 

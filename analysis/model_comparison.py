@@ -52,6 +52,7 @@ MODEL_LABELS = {
     'random_forest': 'Random Forest',
     'logistic_regression': 'Logistic Regression',
     'cnn': 'CNN (sequence)',
+    'cnn_v2': 'BigCNN (deeper, attention)',
 }
 
 
@@ -67,6 +68,7 @@ def _lr_predict_proba(lr_model, lr_scaler, X_te: np.ndarray) -> np.ndarray:
 
 def run_model_comparison(
     cfg: dict, models_dir: str, out_dir: str, cnn_models_dir: str = None,
+    cnn_v2_models_dir: str = None,
 ) -> pd.DataFrame:
     from dataset_assembler import load_dataset, load_dataset_sequences
     from train import load_models
@@ -120,6 +122,17 @@ def run_model_comparison(
                 _, _, seq_te, _, _, _ = load_dataset_sequences(key, cfg)
                 X_te_onehot = one_hot_encode(seq_te, cfg['sequence']['seq_len_bases'])
                 probs['cnn'] = cnn_model.predict_proba(X_te_onehot)
+
+        if cnn_v2_models_dir is not None:
+            cnn_v2_path = os.path.join(cnn_v2_models_dir, f'{key}_cnn_v2.pkl')
+            if os.path.exists(cnn_v2_path):
+                import pickle
+                from train_cnn import one_hot_encode
+                with open(cnn_v2_path, 'rb') as f:
+                    cnn_v2_model = pickle.load(f)
+                _, _, seq_te, _, _, _ = load_dataset_sequences(key, cfg)
+                X_te_onehot = one_hot_encode(seq_te, cfg['sequence']['seq_len_bases'])
+                probs['cnn_v2'] = cnn_v2_model.predict_proba(X_te_onehot)
 
         if not probs:
             print(f"[model_comparison] {key}: no models found — skipping.")
@@ -369,6 +382,8 @@ def main():
     parser.add_argument('--models-dir', default='models/saved/')
     parser.add_argument('--cnn-models-dir', default=None,
                          help='If given, also score any {key}_cnn.pkl found here as a 4th model.')
+    parser.add_argument('--cnn-v2-models-dir', default=None,
+                         help='If given, also score any {key}_cnn_v2.pkl (BigCNN) found here as a 5th model.')
     parser.add_argument('--out',        default='results/model_comparison/')
     parser.add_argument('--bootstrap',  action='store_true',
                          help='Also run the RF-vs-XGBoost bootstrap CI comparison.')
@@ -378,7 +393,7 @@ def main():
     with open(args.config) as f:
         cfg = yaml.safe_load(f)
 
-    run_model_comparison(cfg, args.models_dir, args.out, args.cnn_models_dir)
+    run_model_comparison(cfg, args.models_dir, args.out, args.cnn_models_dir, args.cnn_v2_models_dir)
 
     if args.bootstrap:
         bootstrap_model_comparison(cfg, args.models_dir, args.out, args.n_bootstrap)
