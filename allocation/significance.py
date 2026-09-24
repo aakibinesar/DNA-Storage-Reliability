@@ -98,10 +98,11 @@ def _paired_test(condition: np.ndarray, uniform: np.ndarray) -> dict:
     n_worse  = int(np.sum(diff > 0))
     n_tied   = int(np.sum(diff == 0))
     median_diff = float(np.median(diff))
+    mean_diff = float(np.mean(diff))
 
     if n_tied == len(diff):
         # All paired differences are exactly zero -- wilcoxon is undefined here.
-        return dict(median_diff=0.0, n_better=n_better, n_worse=n_worse,
+        return dict(median_diff=0.0, mean_diff=0.0, n_better=n_better, n_worse=n_worse,
                     n_tied=n_tied, statistic=np.nan, p_value=np.nan)
 
     try:
@@ -109,7 +110,7 @@ def _paired_test(condition: np.ndarray, uniform: np.ndarray) -> dict:
     except ValueError:
         stat, p = np.nan, np.nan
 
-    return dict(median_diff=median_diff, n_better=n_better, n_worse=n_worse,
+    return dict(median_diff=median_diff, mean_diff=mean_diff, n_better=n_better, n_worse=n_worse,
                 n_tied=n_tied, statistic=float(stat) if np.isfinite(stat) else np.nan,
                 p_value=float(p) if np.isfinite(p) else np.nan)
 
@@ -159,6 +160,12 @@ def run_allocation_significance(results_dir: str, verbose: bool = True) -> pd.Da
     df['significant_at_0.05'] = df['p_adjusted'] < 0.05
     df.loc[df['p_adjusted'].isna(), 'significant_at_0.05'] = False
 
+    # Direction of a significant result is taken from the MEAN paired difference (negative =
+    # fewer failures than uniform = better). The median can be exactly 0 for a significant
+    # result, which made a median-based better/worse split ambiguous.
+    df['direction'] = np.where(~df['significant_at_0.05'], 'ns',
+                               np.where(df['mean_diff'] < 0, 'better', 'worse'))
+
     return df
 
 
@@ -183,8 +190,8 @@ def main():
     for comparison_name in df['comparison'].unique():
         sub = df[df['comparison'] == comparison_name]
         n_sig = int(sub['significant_at_0.05'].sum())
-        n_sig_better = int((sub['significant_at_0.05'] & (sub['median_diff'] < 0)).sum())
-        n_sig_worse  = int((sub['significant_at_0.05'] & (sub['median_diff'] > 0)).sum())
+        n_sig_better = int((sub['direction'] == 'better').sum())
+        n_sig_worse  = int((sub['direction'] == 'worse').sum())
         print(f"\n  -- {comparison_name} ({len(sub)} tests, BH-FDR alpha=0.05) --")
         print(f"  Significant: {n_sig}/{len(sub)}  "
               f"({n_sig_better} significantly better than uniform, "

@@ -16,14 +16,15 @@ The pipeline covers the full experimental workflow, at n=10,000 sequences × 28 
 - Calibrated ML model training (XGBoost, Random Forest, Logistic Regression, and a 1D CNN over raw sequence as a feature-engineering-free comparison point)
 - A benefit-aware model (Part B) trained to predict marginal benefit of added parity directly, rather than raw failure risk
 - Adaptive redundancy allocation vs. uniform, oracle, and rule-based baselines (112 config × Δ combinations)
+- A post hoc abstention analysis: letting the validation-based budget selection choose "do not reallocate" (`analysis/deployable_abstention.py`)
 - Feature ablation, calibration, cross-substitution-rate transfer, and distribution-shift robustness analysis
 - Paper-ready figure generation
 
 **Headline findings**, stated as plainly as the results support:
-- **Real, trustworthy classification signal exists in roughly a third of all configurations (9/28)** — not broadly, and not uniformly. That ceiling is a property of the data regime, confirmed by two 1D CNN architectures (a small one, and a 4x-larger one with attention pooling — same result either way) with direct access to raw sequence performing *no better* (and on the two weakest configs, measurably worse) than models trained on ~80 hand-crafted composition features.
+- **Real, trustworthy classification signal exists in roughly a third of all configurations (9/28)** — not broadly, and not uniformly. That ceiling is a property of the data regime, confirmed by two 1D CNN architectures (a small one, and a 4x-larger one with attention pooling — same result either way) with direct access to raw sequence performing *no better* (and on the two weakest configs, measurably worse) than models trained on 76 hand-crafted composition features.
 - **Which third is informative depends on coverage, not just substitution rate**: the informative substitution-rate band shifts to higher noise levels as coverage increases (K=3: ~5–15%, K=5: ~15–20%) — a concrete, mechanistically-grounded rule for deciding when a given deployment is worth modeling at all (see Practical Deployment Guidance below).
 - **Models do not transfer across substitution rates without retraining** — formal transfer radius is 0.000 in every stratum tested, on a leak-free split.
-- **A raw failure-risk classifier is the wrong tool for the reallocation decision itself** — it is essentially uncorrelated with true marginal benefit of added parity (Spearman ≈ −0.02 to −0.05). A benefit-aware model trained on the right target closes much of that gap, but the resulting allocation improvement is real, modest, and delta-dependent, not a uniform win: only 26 of 112 config×delta combinations beat uniform allocation at statistical significance, with Δ=2 the clear best default and Δ=1/Δ=3 actively harmful by construction (see Delta as a Leverage Dial below).
+- **A raw failure-risk classifier is the wrong tool for the reallocation decision itself** — it is essentially uncorrelated with true marginal benefit of added parity (Spearman ≈ −0.02 to −0.05). A benefit-aware model trained on the right target closes much of that gap, but the resulting allocation improvement is real, modest, and delta-dependent, not a uniform win: only 24 of 112 config×delta combinations beat uniform allocation at statistical significance when the policy is forced to reallocate (letting the validation-based budget selection abstain removes every significant loss while keeping every significant win — see Deployable Policy with Abstention), with Δ=2 the clear best default and Δ=1/Δ=3 actively harmful by construction (see Delta as a Leverage Dial below).
 
 This project treats those as the actual contribution — a rigorously audited (see Fixed Issues below), statistically honest characterization of when ML-based reliability prediction helps in DNA storage and when it doesn't — rather than as caveats on top of a headline predictor.
 
@@ -62,7 +63,7 @@ Across the 28 configurations, three distinct regimes emerge:
 ```
 ├── src/
 │   ├── sequence_generator.py     # Synthetic oligo generation + channel simulation
-│   ├── feature_extractor.py      # ~80 sequence features per oligo
+│   ├── feature_extractor.py      # 76 sequence features per oligo
 │   └── dataset_assembler.py      # Canonical (leak-free) train/val/test splits, one per encoding
 ├── models/
 │   ├── train.py                  # XGBoost / RF / LR training with grid search
@@ -89,6 +90,8 @@ Across the 28 configurations, three distinct regimes emerge:
 │   ├── channel_ablation.py       # Model robustness under ablated channel-noise variants
 │   ├── risk_marginal_benefit_correlation.py  # Diagnostic: does model risk track true marginal benefit?
 │   ├── validate_benefit_model.py # Part B: benefit model vs. failure-risk model, scored on true test-set benefit
+│   ├── deployable_abstention.py  # Validation OFR of each reallocation budget incl. tau=0 (the abstain option)
+│   ├── abstention_summary.py     # Forced vs. abstention-enabled vs. validation-selected policies, paired tests
 │   └── figures.py                # Paper figures (Figs 2–5, S1, S4)
 ├── configs/
 │   └── experiment_config.yaml    # All hyperparameters and grid settings
@@ -191,6 +194,7 @@ python scratch_parallel_benefit.py   --workers 6 --deltas 2,3,4      # benefit-a
 python scratch_train_cnn_all.py                                     # CNN, 28 configs, sequential (single GPU)
 python scratch_train_cnn_v2_all.py                                  # BigCNN, 28 configs, sequential (single GPU)
 python scratch_parallel_allocation.py --workers 6 --deltas 1,2,3,4   # allocation experiments, 112 jobs
+python scratch_parallel_abstention.py --workers 6                   # abstention analysis: validation scoring, 28 jobs
 python scratch_parallel_stage.py ablation --workers 6               # any per-key analysis stage, 28 configs
 ```
 
@@ -206,6 +210,7 @@ After the full pipeline completes:
 results/
 ├── allocation/             # 112 NPZ files — OFR arrays (30 MC runs each), risk + benefit-aware conditions
 ├── allocation_significance/ # paired Wilcoxon significance, BH-FDR corrected, all 112 combos x both models
+├── deployable_abstention/  # 28 per-config validation-OFR CSVs (budgets incl. 0) + abstention_summary.csv, abstention_selected.csv
 ├── benefit_labels/         # 84 NPZ files — kernel-smoothed marginal-benefit training labels (Part B)
 ├── benefit_model_validation/ # benefit vs. risk model, scored on true test-set marginal benefit (delta=2)
 ├── benefit_model_validation_delta4/ # same, at delta=4
@@ -251,7 +256,7 @@ Across all 112 configs (28 keys × 4 delta values — Δ=1, 2, 3, 4; see Delta a
 
 The oracle result reflects a paired Monte Carlo estimation design: the low/default/high-parity outcomes for a given run share one simulated channel-noise draw rather than three independently resimulated ones, which substantially reduces estimation noise for the same 30-run budget (see `allocation/experiment.py`'s `estimate_paired_marginal_effects`). Under that cleaner estimate, the theoretical ceiling is essentially always at least as good as uniform.
 
-The deployed-model result is the more important number for anyone actually using this system, and it's honest about a real gap: on point estimates alone, the model wins outright or ties in about a third of config×delta combinations, is roughly break-even in another third, and meaningfully underperforms uniform in the remaining third. **This point-estimate picture is optimistic relative to a proper paired significance test** (see the Statistical Significance table in Benefit-Aware Model below): only 26/112 config×delta combinations are *significantly* better than uniform, versus 55/112 significantly worse — the point-estimate win rate describes the sign of the average, not a statistically reliable win, and a large share of that gap is driven by Δ=1 and Δ=3, which should not be deployed at all (see below). **Root cause (confirmed directly, see `analysis/risk_marginal_benefit_correlation.py`): the model is trained to predict raw failure probability, not marginal benefit of added parity, and these are essentially uncorrelated on average (mean Spearman ≈ -0.020, median ≈ -0.033 across 28 configs at Δ=2) even though the model discriminates raw failure risk well.** A failure-risk classifier is the wrong tool for a reallocation decision — see Benefit-Aware Model below for the direct fix, which improves the *correlation* substantially even though it does not yet resolve the significance-tested allocation gap.
+The deployed-model result is the more important number for anyone actually using this system, and it's honest about a real gap: on point estimates alone, the model wins outright or ties in about a third of config×delta combinations, is roughly break-even in another third, and meaningfully underperforms uniform in the remaining third. **This point-estimate picture is optimistic relative to a proper paired significance test** (see the Statistical Significance table in Benefit-Aware Model below): only 24/112 config×delta combinations are *significantly* better than uniform, versus 59/112 significantly worse — the point-estimate win rate describes the sign of the average, not a statistically reliable win, and a large share of that gap is driven by Δ=1 and Δ=3, which should not be deployed at all (see below). Most of these losses come from the *forced* nature of this protocol (the validation grid has no "do not reallocate" option) rather than from the model itself — see Deployable Policy with Abstention below. **Root cause (confirmed directly, see `analysis/risk_marginal_benefit_correlation.py`): the model is trained to predict raw failure probability, not marginal benefit of added parity, and these are essentially uncorrelated on average (mean Spearman ≈ -0.020, median ≈ -0.033 across 28 configs at Δ=2) even though the model discriminates raw failure risk well.** A failure-risk classifier is the wrong tool for a reallocation decision — see Benefit-Aware Model below for the direct fix, which improves the *correlation* substantially even though it does not yet resolve the significance-tested allocation gap.
 
 At Δ=4 the target mismatch is slightly worse (mean Spearman ≈ -0.047, median ≈ -0.102) — see Delta as a Leverage Dial below for why a larger reallocation step size makes the risk-vs-benefit mismatch, and its consequences, more pronounced rather than less.
 
@@ -268,9 +273,11 @@ Rather than only diagnosing the target-mismatch problem above, the project inclu
 | Δ | | Mean Spearman | Median Spearman | Configs improved |
 |---|---|---|---|---|
 | **2** | Old failure-risk model | -0.020 | -0.033 | — |
-| **2** | **New benefit-aware model** | **+0.136** | **+0.087** | **23 / 28** |
+| **2** | **New benefit-aware model** | **+0.147** | **+0.103** | **23 / 26** |
 | **4** | Old failure-risk model | -0.047 | -0.102 | — |
-| **4** | **New benefit-aware model** | **+0.273** | **+0.205** | **23 / 28** |
+| **4** | **New benefit-aware model** | **+0.289** | **+0.228** | **23 / 26** |
+
+(Over the 26 configs where the correlation is defined — 2 of the 28 have no variation in true marginal benefit to correlate with.)
 
 At Δ=2, the improvement is concentrated exactly where it matters: the configs where the old model was most badly *backwards* (`sub20_k3_simple`: -0.35 → +0.36; `sub05_k3_simple`: -0.26 → +0.22; `sub01_k3_simple`: -0.18 → +0.22) see the largest gains, while configs where the old model was already reasonable see only small, bounded declines (worst case -0.02). Several `sub01` configs that had little usable signal under the old model now get valid, small-positive correlations. The same pattern holds at Δ=4, more strongly — e.g. `sub20_k3_simple` goes from -0.68 to +0.74.
 
@@ -278,11 +285,11 @@ At Δ=2, the improvement is concentrated exactly where it matters: the configs w
 
 | Δ | Model | Beats/ties uniform | Small loss (≤0.5pp) | Meaningful loss | Mean OFR reduction (pp) |
 |---|---|---|---|---|---|
-| 2 | Risk model (deployable) | 18 / 28 | 6 / 28 | 4 / 28 | 0.25 ± 0.20 |
+| 2 | Risk model (deployable) | 19 / 28 | 4 / 28 | 5 / 28 | 0.25 ± 0.20 |
 | 2 | **Benefit-aware model (deployable)** | 11 / 28 | 15 / 28 | **2 / 28** | **0.38 ± 0.23** |
-| 3 | Risk model (deployable) | 6 / 28 | 10 / 28 | 12 / 28 | **−0.41 ± 0.19** |
+| 3 | Risk model (deployable) | 5 / 28 | 12 / 28 | 11 / 28 | **−0.41 ± 0.19** |
 | 3 | **Benefit-aware model (deployable)** | 0 / 28 | 10 / 28 | **18 / 28** | **−0.96 ± 0.12** |
-| 4 | Risk model (deployable) | 12 / 28 | 10 / 28 | 6 / 28 | 0.31 ± 0.31 |
+| 4 | Risk model (deployable) | 11 / 28 | 11 / 28 | 6 / 28 | 0.30 ± 0.31 |
 | 4 | **Benefit-aware model (deployable)** | 7 / 28 | 12 / 28 | **9 / 28** | **0.73 ± 0.52** |
 
 (Mean ± SEM of the per-config `uniform − method` OFR difference across the 28 configs; negative = worse than doing nothing. See Figure 6, `results/figures/fig6_benefit_vs_risk_deployable.png`.)
@@ -293,20 +300,22 @@ At Δ=2, the improvement is concentrated exactly where it matters: the configs w
 
 | Δ | Model | Sig. better than uniform | Sig. worse than uniform | Not significant |
 |---|---|---|---|---|
-| 1 | Risk model (deployable) | 0 / 28 | 20 / 28 | 8 / 28 |
-| 2 | **Risk model (deployable)** | **13 / 28** | 7 / 28 | 8 / 28 |
+| 1 | Risk model (deployable) | 0 / 28 | 23 / 28 | 5 / 28 |
+| 2 | **Risk model (deployable)** | **11 / 28** | 7 / 28 | 10 / 28 |
 | 2 | Benefit-aware model (deployable) | 7 / 28 | 14 / 28 | 7 / 28 |
 | 3 | Risk model (deployable) | 4 / 28 | 17 / 28 | 7 / 28 |
 | 3 | **Benefit-aware model (deployable)** | **0 / 28** | **26 / 28** | 2 / 28 |
-| 4 | Risk model (deployable) | 9 / 28 | 11 / 28 | 8 / 28 |
+| 4 | Risk model (deployable) | 9 / 28 | 12 / 28 | 7 / 28 |
 | 4 | Benefit-aware model (deployable) | 7 / 28 | 17 / 28 | 4 / 28 |
+
+(Direction of a significant result is taken from the mean paired OFR difference; `allocation_significance.csv` carries it in the `direction` column. All counts are computed from the released `results/allocation/*.npz` arrays.)
 
 Four honest conclusions follow from this, superseding the point-estimate framing above:
 
-- **Δ=1 should never be used.** Every significant result at Δ=1 is a loss (0 significant wins, 20 significant losses) — this is not noise, it is structural: at Δ=1, promotion capacity is unchanged (`9 // 2 = 4`, identical to the default) while demotion capacity still drops (`7 // 2 = 3`). Reallocating at Δ=1 can only ever harm the demoted sequences, with zero compensating benefit on the promoted side. This is a clean, mechanistically-explained reason to exclude Δ=1 from any deployment recommendation, not merely a "smallest effect size" footnote.
+- **Δ=1 should never be used.** Every significant result at Δ=1 is a loss (0 significant wins, 23 significant losses) — this is not noise, it is structural: at Δ=1, promotion capacity is unchanged (`9 // 2 = 4`, identical to the default) while demotion capacity still drops (`7 // 2 = 3`). Reallocating at Δ=1 can only ever harm the demoted sequences, with zero compensating benefit on the promoted side. This is a clean, mechanistically-explained reason to exclude Δ=1 from any deployment recommendation, not merely a "smallest effect size" footnote.
 - **Δ=3 should never be used either, and the benefit-aware model fails almost universally there** (0/28 significantly better, 26/28 significantly worse — the single most one-sided result anywhere in this table). This was a predicted, not discovered-by-accident, result: see Delta as a Leverage Dial below for the structural reason (Δ=3 combines Δ=2's small promotion upside with Δ=4's large demotion downside).
-- **At Δ=2, the risk model now shows a clear, statistically significant edge over the benefit-aware model** (13/28 significant wins vs. 7/28, at nearly the same significant-loss rate: 7/28 vs. 14/28) — a reversal from the earlier, noisier n=2,000 run, where the two models' significant win/loss counts were indistinguishable. With more test sequences per config sharpening the significance test, the risk model's ranking-quality edge at this delta comes through more clearly than the benefit model's better raw correlation with true marginal benefit would suggest. The two models still disagree on which configs work (13/28 configs agree on outcome, 15/28 flip — in most of the flips the risk model wins significantly where the benefit model does not), so the benefit-aware objective is not simply strictly worse everywhere, but at Δ=2 specifically it has not (yet) translated its better correlation into a better deployable allocation.
-- **At Δ=4, the benefit model's larger mean improvement comes with a larger significantly-worse footprint than the risk model's** (17/28 vs. 11/28) — this reinforces, rather than contradicts, the leverage-dial mechanism below: a model that is directionally better on average can still lose more often and more severely at a larger delta, because delta amplifies both sides of every ranking decision.
+- **At Δ=2, the risk model now shows a clear, statistically significant edge over the benefit-aware model** (11/28 significant wins vs. 7/28, and half the significant-loss rate: 7/28 vs. 14/28) — a reversal from the earlier, noisier n=2,000 run, where the two models' significant win/loss counts were indistinguishable. With more test sequences per config sharpening the significance test, the risk model's ranking-quality edge at this delta comes through more clearly than the benefit model's better raw correlation with true marginal benefit would suggest. The two models still disagree on which configs work (14/28 configs agree on outcome, 14/28 flip — in 7 of the flips the risk model wins significantly where the benefit model does not, in 3 the reverse), so the benefit-aware objective is not simply strictly worse everywhere, but at Δ=2 specifically it has not (yet) translated its better correlation into a better deployable allocation.
+- **At Δ=4, the benefit model's larger mean improvement comes with a larger significantly-worse footprint than the risk model's** (17/28 vs. 12/28) — this reinforces, rather than contradicts, the leverage-dial mechanism below: a model that is directionally better on average can still lose more often and more severely at a larger delta, because delta amplifies both sides of every ranking decision.
 
 Full per-config, per-delta results: `results/allocation_significance/allocation_significance.csv`.
 
@@ -325,7 +334,7 @@ RS correction capacity is `l_rs // 2` (integer floor division), and the default 
 
 A larger Δ moves each reallocated sequence across a bigger capacity gap. That amplifies the payoff of a *correct* promote/demote decision — but by the same mechanism, it amplifies the cost of an *incorrect* one, independent of how good the underlying ranking is. Δ is a leverage dial on both sides of every decision, not just the good side. **Δ=3 is not an interpolation between Δ=2 and Δ=4** — the table above shows it inherits Δ=2's smaller promotion reward but Δ=4's larger demotion penalty, an asymmetric combination that should be structurally *dominated* by Δ=2 (same upside, strictly worse downside).
 
-**This was tested as a falsifiable prediction, not discovered after the fact.** Before running any Δ=3 experiments, the prediction was: Δ=3 should underperform Δ=2 because of this asymmetry. The result (see the Allocation Results table above) confirmed it far more strongly than expected — Δ=3 isn't merely worse than Δ=2, it is worse than *uniform* on average for both the risk model (−0.44pp) and especially the benefit-aware model (−0.96pp, and significantly worse than uniform in 24/28 configs, the most one-sided result anywhere in this project). The benefit-aware model's failure is particularly informative: a model trained specifically to predict marginal benefit *at Δ=3's own capacity swing* still produces a worse allocation than doing nothing, because getting the ranking right doesn't help when the cost structure itself is asymmetric — you only need to be wrong on the demotion side (the −2 capacity swing) for the loss to outweigh a same-magnitude-as-Δ=2 gain on the promotion side.
+**This was tested as a falsifiable prediction, not discovered after the fact.** Before running any Δ=3 experiments, the prediction was: Δ=3 should underperform Δ=2 because of this asymmetry. The result (see the Allocation Results table above) confirmed it far more strongly than expected — Δ=3 isn't merely worse than Δ=2, it is worse than *uniform* on average for both the risk model (−0.41pp) and especially the benefit-aware model (−0.96pp, and significantly worse than uniform in 26/28 configs, the most one-sided result anywhere in this project). The benefit-aware model's failure is particularly informative: a model trained specifically to predict marginal benefit *at Δ=3's own capacity swing* still produces a worse allocation than doing nothing, because getting the ranking right doesn't help when the cost structure itself is asymmetric — you only need to be wrong on the demotion side (the −2 capacity swing) for the loss to outweigh a same-magnitude-as-Δ=2 gain on the promotion side.
 
 **Controlled isolation test** (not part of the automated pipeline; ad hoc verification of the Δ=2-vs-Δ=4 comparison specifically — run once at the original n=2,000 scale and not repeated in the n=10,000 refresh, since it's a mechanism check rather than a headline result): to confirm the leverage effect is a real mechanism and not a confound from the Δ=2 and Δ=4 benefit models selecting different sequences, four configs were tested by fixing the *exact same* promoted/demoted sequences (selected once, using only the Δ=2 model's ranking) and then applying a Δ=2-sized vs. a Δ=4-sized parity swap to that identical selection, against the same simulated channel noise:
 
@@ -338,13 +347,47 @@ A larger Δ moves each reallocated sequence across a bigger capacity gap. That a
 
 With sequence selection held completely fixed, the Δ=4-sized swap costs more than the Δ=2-sized swap in all four cases — confirming the leverage effect directly, rather than inferring it from aggregate before/after numbers alone. **Practical takeaway**: Δ=2 is the safest operating point of the four values tested (smallest downside per wrong decision, and the only one with a demonstrated significance-level win in this project); Δ=3 should be avoided entirely regardless of model quality (it is structurally dominated by Δ=2); Δ=4 is only worth it if the ranking model is good enough, and consistently good enough across the deployed regime, to be trusted with the larger per-decision stakes it creates. Δ=5 and above are not worth testing — `l_rs_min=4` clamps the demotion side identically for Δ≥4 (`max(8−Δ, 4)`), so Δ=5's capacities are numerically identical to Δ=4's.
 
+### Deployable Policy with Abstention
+
+The deployable policies above choose their reallocation budget from a validation grid of 5%/10%/20%/30% of oligos. That grid has no zero, so the policy is **forced to reallocate** even when every candidate budget hurts on validation — which is exactly what happens in the saturated and no-signal configs, and is the source of most of the significant losses in the tables above. `analysis/deployable_abstention.py` re-scores the validation OFR of the same candidates **plus τ = 0** (i.e. uniform allocation), using the same seeds, models and channel as the original selection; because validation byte errors depend only on the config, they are simulated once per config and reused for every Δ and both models. `analysis/abstention_summary.py` then evaluates three policies against uniform allocation with the same paired Wilcoxon / BH-FDR procedure as above, using the test-set arrays already in `results/allocation/` — no new test-set simulation is needed, since an abstention-enabled policy either picks the same non-zero budget as the forced policy (its stored OFR array) or picks τ = 0 (which *is* uniform allocation). A hard assertion checks that the re-scored validation reproduces **all 196** originally saved tier fractions exactly.
+
+- **Forced** — the primary experiment's policy (grid without 0).
+- **Abstain** — grid with 0; ties resolved toward 0.
+- **Validation-selected** — validation OFR chooses among uniform allocation, the risk model at its best non-zero budget, and the benefit-aware model at its best non-zero budget (ties toward uniform, then the risk model); Δ = 2, 3, 4 only, since no benefit model exists at Δ = 1.
+
+Mean OFR reduction vs. uniform in percentage points (mean ± SEM over 28 configs), and number of configs significantly better / worse (BH-FDR 0.05):
+
+| Policy | Δ=1 | Δ=2 | Δ=3 | Δ=4 |
+|---|---|---|---|---|
+| Risk model, forced | −0.38 ± 0.07 (0 / 23) | +0.25 ± 0.20 (11 / 7) | −0.41 ± 0.19 (4 / 17) | +0.30 ± 0.31 (9 / 12) |
+| **Risk model, abstain** | 0.00 ± 0.00 (0 / 0) | **+0.40 ± 0.18 (11 / 0)** | **+0.15 ± 0.13 (4 / 0)** | **+0.62 ± 0.27 (9 / 0)** |
+| Benefit-aware, forced | — | +0.38 ± 0.23 (7 / 14) | −0.96 ± 0.12 (0 / 26) | +0.73 ± 0.52 (7 / 17) |
+| **Benefit-aware, abstain** | — | **+0.52 ± 0.22 (7 / 0)** | 0.00 ± 0.00 (0 / 0) | **+1.11 ± 0.48 (7 / 0)** |
+| **Validation-selected** | — | **+0.76 ± 0.25 (14 / 0)** | **+0.15 ± 0.13 (4 / 0)** | **+1.39 ± 0.51 (11 / 0)** |
+
+(For reference, the oracle's mean reductions are +0.44, +0.31 and +2.10 pp at Δ = 2, 3, 4; it is a conservative diagnostic reference, not a strict upper bound.)
+
+What this shows:
+
+- **Abstention removes every significant loss and keeps every significant win.** Risk model: 24 better / 0 worse across all 112 config × Δ pairs (vs. 24 / 59 forced); benefit-aware model: 14 better / 0 worse across 84 (vs. 14 / 57 forced); validation-selected: 29 better / 0 worse across 84.
+- **The policy learns the structural results from validation alone.** It abstains in 28/28 configs at Δ=1 (promotion buys no capacity there), and in 23/28 (risk) and 28/28 (benefit-aware) at Δ=3 (dominated by Δ=2) — with no knowledge of the floor-division argument in *Delta as a Leverage Dial*. Abstention rates at Δ=2 / Δ=4: 9/28 and 18/28 (risk), 18/28 and 20/28 (benefit-aware).
+- **When it does reallocate, it wins.** The risk model reallocates in 34 config × Δ pairs and is significantly better in 24 of them and never worse; the benefit-aware model reallocates in 18 and is significantly better in 14.
+- **The two models are complementary.** The validation-selected policy picks the risk model in 16 / 5 / 7 configs, the benefit-aware model in 5 / 0 / 5, and uniform allocation in 7 / 23 / 16 at Δ = 2 / 3 / 4, and wins more often than either model alone at Δ=2 (14 vs. 11 and 7).
+
+Caveats, stated plainly: (1) **this is a post hoc analysis** — it was added after the forced-reallocation losses were observed; it has no tunable parameter (argmin of validation OFR, ties toward abstaining), but it should not be presented as a pre-registered result. (2) "Not significant" for an abstaining config means *no change*, so "zero significant losses" is guaranteed for abstained configs and informative only for the ones that reallocate. (3) The decisions rest on 30-run validation estimates over 1,500 oligos, and selecting among three candidates raises winner's-curse risk; the absence of a significant test-set loss here does not guarantee it on other channels. (4) The same channel simulator generates validation and test data, so this does not address real-data validity.
+
+```bash
+python scratch_parallel_abstention.py --workers 6    # ~40 min: validation OFR for tau in {0, .05, .10, .20, .30}, 28 configs
+python analysis/abstention_summary.py                # -> results/deployable_abstention/abstention_summary.csv, abstention_selected.csv
+```
+
 ### Model Comparison: XGBoost vs. Random Forest vs. Logistic Regression
 
 XGBoost is the primary model used everywhere above, but all three tiers are trained for every config (`models/train.py`). `analysis/model_comparison.py` scores all three on the same footing — the informative-regime Layer 1 suite from Regime Evaluation above (regime assignment and binary labels both derived from the same continuous `failure_freq`, so a linear discriminator and two calibrated regressors are compared on one common yardstick, not three different targets):
 
 | Model | Usable configs | Mean AUROC | Median AUROC | Mean F1 | Mean ECE | Mean Brier |
 |---|---|---|---|---|---|---|
-| XGBoost (Platt-calibrated) | 11 / 28 | 0.865 | 0.921 | 0.646 | 0.025 | 0.0074 |
+| XGBoost (Platt-calibrated) | 11 / 28 | 0.864 | 0.912 | 0.660 | 0.025 | 0.0074 |
 | **Random Forest (isotonic-calibrated)** | 11 / 28 | **0.867** | **0.928** | **0.670** | **0.025** | **0.0073** |
 | Logistic Regression | 11 / 28 | 0.808 | 0.842 | 0.579 | 0.202 | 0.0648 |
 
@@ -354,9 +397,9 @@ XGBoost is the primary model used everywhere above, but all three tiers are trai
 
 | Comparison | Mean AUROC diff (RF − XGBoost) | 95% CI | Configs with CI excluding zero |
 |---|---|---|---|
-| Cluster bootstrap, all 11 usable configs | **+0.002** | **[−0.003, +0.007]** | **0 / 11** |
+| Cluster bootstrap, all 11 usable configs | **+0.004** | **[−0.002, +0.009]** | **0 / 11** |
 
-81% of the 2000 bootstrap draws favor RF, and the 95% CI still includes zero — a lean toward RF but no reliable AUROC edge either way. Combined with the fact that RF's advantage in the table above is concentrated in F1/ECE/Brier (calibration and decision-threshold behavior) rather than in AUROC (ranking quality) itself, the most defensible reading is: isotonic calibration (RF) is likely a more flexible fit than Platt scaling (XGBoost) at this dataset size, not that random forests discriminate failure risk meaningfully better than gradient boosting on this task. Full per-config bootstrap CIs: `results/model_comparison/model_comparison_bootstrap_per_config.csv`.
+91% of the 2000 bootstrap draws favor RF, and the 95% CI still includes zero — a lean toward RF but no reliable AUROC edge either way. Combined with the fact that RF's advantage in the table above is concentrated in F1/ECE/Brier (calibration and decision-threshold behavior) rather than in AUROC (ranking quality) itself, the most defensible reading is: isotonic calibration (RF) is likely a more flexible fit than Platt scaling (XGBoost) at this dataset size, not that random forests discriminate failure risk meaningfully better than gradient boosting on this task. Full per-config bootstrap CIs: `results/model_comparison/model_comparison_bootstrap_per_config.csv`.
 
 **Logistic Regression is clearly worse on every metric** — expected, since it is a linear discriminator forced onto the majority-fail binary label while the other two regress directly on the continuous failure frequency, and the informative regime is exactly where a linear decision boundary is least likely to hold.
 
@@ -364,7 +407,7 @@ XGBoost is the primary model used everywhere above, but all three tiers are trai
 
 ### Sequence-Level Model: 1D CNN vs. Hand-Crafted Features
 
-The three models above all learn from the same ~80 hand-crafted sequence-composition features (GC content, homopolymer runs, dinucleotide/trinucleotide frequencies, etc.). A natural question: is the informative-regime ceiling above (real signal in about a third of configs, and even there only modest AUROC) a property of the *data*, or an artifact of what those hand-crafted features happen to capture? If a model with direct access to raw sequence — no feature engineering, no domain assumptions — could do meaningfully better, the features would be the bottleneck, not the underlying reliability signal.
+The three models above all learn from the same 76 hand-crafted sequence-composition features (GC content, homopolymer runs, dinucleotide/trinucleotide frequencies, etc.). A natural question: is the informative-regime ceiling above (real signal in about a third of configs, and even there only modest AUROC) a property of the *data*, or an artifact of what those hand-crafted features happen to capture? If a model with direct access to raw sequence — no feature engineering, no domain assumptions — could do meaningfully better, the features would be the bottleneck, not the underlying reliability signal.
 
 `models/train_cnn.py` trains a small 1D CNN directly on one-hot-encoded sequence (same train/val/test split, same HP-search/early-stopping/calibration discipline as the classical models) for all 28 configs. The answer is no — the CNN does not outperform the feature-based models on any usable config:
 
@@ -431,17 +474,17 @@ The findings above are scattered across several sections; this pulls them into o
 
 This is a direct consequence of the coverage/substitution-rate shift above (Failure Regime Map): more redundant coverage needs proportionally more channel noise before there's failure-rate variability worth predicting at all. Don't reuse a K=3 deployment threshold at K=5, or vice versa.
 
-**2. Within that band, prefer Δ=2 over every other tested reallocation step size.** Δ=1 makes no capacity difference on promotion by construction (see Delta as a Leverage Dial) and is a wasted reallocation. Δ=3 is structurally dominated by Δ=2 — same promotion upside, strictly worse demotion downside — and was the single worst-performing setting tested (significantly worse than uniform in 24/28 configs for the benefit-aware model). Δ=4 trades a larger correct-decision payoff for a larger incorrect-decision penalty in the same direction as Δ=3's problem, just less severely; only reach for it if Δ=2's capacity swing (±1) is known to be insufficient for the deployment's target reliability.
+**2. Within that band, prefer Δ=2 over every other tested reallocation step size.** Δ=1 makes no capacity difference on promotion by construction (see Delta as a Leverage Dial) and is a wasted reallocation. Δ=3 is structurally dominated by Δ=2 — same promotion upside, strictly worse demotion downside — and was the single worst-performing setting tested (significantly worse than uniform in 26/28 configs for the benefit-aware model). Δ=4 trades a larger correct-decision payoff for a larger incorrect-decision penalty in the same direction as Δ=3's problem, just less severely; only reach for it if Δ=2's capacity swing (±1) is known to be insufficient for the deployment's target reliability.
 
 **3. Use the benefit-aware model (Part B), not the raw failure-risk classifier, for the allocation decision itself.** The risk classifier discriminates *failure probability* well but is essentially uncorrelated with *marginal benefit of added parity* (mean Spearman ≈ −0.02 to −0.05 depending on Δ) — the quantity a reallocation decision actually needs. The benefit-aware model closes much of that gap. Keep the risk classifier for what it's good at: informative-regime characterization, calibration reporting, and deciding *whether* a config is worth modeling at all (steps 1–2 above).
 
-**4. Set expectations honestly even inside this recommended envelope.** Meeting all three conditions above does not guarantee a significant win: across all 112 config×delta combinations, only 26 are *significantly* better than uniform under a proper paired test (vs. 55 significantly worse) — and that 26 is concentrated in, not synonymous with, the region this guidance narrows you down to. Treat this as "here is where it is *worth checking* whether modeling helps for your specific deployment," not "here is where modeling is guaranteed to help." Validate per-deployment with `allocation/significance.py` before trusting the model in production.
+**4. Set expectations honestly even inside this recommended envelope.** Meeting all three conditions above does not guarantee a significant win: across all 112 config×delta combinations, only 24 are *significantly* better than uniform under a proper paired test when reallocation is forced (vs. 59 significantly worse; with an abstain option the losses vanish — see Deployable Policy with Abstention) — and that 24 is concentrated in, not synonymous with, the region this guidance narrows you down to. Treat this as "here is where it is *worth checking* whether modeling helps for your specific deployment," not "here is where modeling is guaranteed to help." Validate per-deployment with `allocation/significance.py` before trusting the model in production.
 
 ### Known Limitations
 
 - **Encoding comparison is largely confounded.** A raw comparison of simple vs. constrained encoding shows constrained encoding failing less often, but post-stratifying on GC content and homopolymer run length (the `encoding_confound` stage) shows most of that raw effect disappears or reverses once composition is controlled for — see `results/encoding_confound/`.
 - **The deployed (risk-model) allocation underperforms its theoretical ceiling** on roughly a quarter of configs (see Allocation Results) because it optimizes the wrong target (failure risk, not marginal benefit of added parity) — quantified, not hidden, and directly addressed by the Benefit-Aware Model above.
-- **The benefit-aware model is not a demonstrated statistical improvement over the risk model at any delta actually tested — and at Δ=2 it is now demonstrably worse on this metric.** Point estimates favor it at Δ=2 and Δ=4 (higher mean OFR reduction) and it fails even more severely than the risk model at Δ=3, but paired significance testing (see Allocation Results above) shows the risk model with nearly double the significant-win rate at Δ=2 (13/28 vs. 7/28), a *worse* profile for the benefit model at Δ=4 (17/28 significant losses vs. the risk model's 11/28), and a dramatically worse one at Δ=3 (26/28 significant losses vs. the risk model's 17/28). Its real, verified value so far is a much better correlation with true marginal benefit (Model Comparison / Benefit-Aware Model above), which has not yet translated into a better deployable allocation at any tested delta — a genuine, honestly-reported open question for follow-up work, not a solved improvement.
+- **Under forced reallocation, the benefit-aware model is not a demonstrated statistical improvement over the risk model at any delta actually tested — and at Δ=2 it is now demonstrably worse on this metric (with an abstain option the two are complementary; see Deployable Policy with Abstention).** Point estimates favor it at Δ=2 and Δ=4 (higher mean OFR reduction) and it fails even more severely than the risk model at Δ=3, but paired significance testing (see Allocation Results above) shows the risk model with a higher significant-win rate at Δ=2 (11/28 vs. 7/28), a *worse* profile for the benefit model at Δ=4 (17/28 significant losses vs. the risk model's 12/28), and a dramatically worse one at Δ=3 (26/28 significant losses vs. the risk model's 17/28). Its real, verified value so far is a much better correlation with true marginal benefit (Model Comparison / Benefit-Aware Model above), which has not yet translated into a better deployable allocation at any tested delta — a genuine, honestly-reported open question for follow-up work, not a solved improvement.
 - **Δ=1 and Δ=3 reallocation should not be used.** Δ=1 is structurally one-sided (promotion capacity is unchanged while demotion capacity still drops: 0/28 configs significantly better than uniform, 20/28 significantly worse). Δ=3 is structurally dominated by Δ=2 (same promotion swing, a larger demotion swing borrowed from Δ=4) and this was confirmed, not just predicted: it is the single worst-performing delta tested, significantly worse than uniform in 17/28 configs for the risk model and 26/28 for the benefit-aware model. Of the values tested, only Δ=2 and Δ=4 are worth considering for deployment, and Δ=5+ adds nothing new (see Delta as a Leverage Dial above).
 
 ### Fixed Issues (resolved before manuscript writing)
